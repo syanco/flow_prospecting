@@ -4,8 +4,14 @@ author: "Scott Yanco"
 date: "`r format(Sys.time(), '%d %B, %Y')`"
 output: 
   html_document:
-    code_folding: "hide"
-    css: style.css  
+    code_folding: "show"
+    css: style.css 
+    toc: true
+    toc_float: true
+    theme: sandstone
+    includes:
+      before_body: header.html 
+      after_body: footer.html
 ---
 
 ```{r setup, include=FALSE}
@@ -16,6 +22,8 @@ knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
 #Required Libraries
 
 ```{r message=FALSE, warning=FALSE}
+#devtools::install_github("cardiomoon/ggiraphExtra")
+
 #data mgmt
 library(tidyverse) 
 
@@ -25,6 +33,7 @@ library(ggmosaic)
 library(wesanderson)
 library(png)
 library(grid)
+library(ggiraphExtra)
 
 #inference
 library(lme4)
@@ -33,34 +42,109 @@ library(AICcmodavg)
 
 # Initial Data Import, Cleaning, and Management 
 
-Load in the data.
+## Load and clean dD dataset
 
 ```{r}
-#read in data, excerpt NA rows at bottom of morph_data
-deut_data <- read.csv("Deut.csv", stringsAsFactors = F) #iso data
-morph_data <- read.csv("Morph.csv", stringsAsFactors = F) #capture data
-morph_data <- morph_data[1:216,] #clean the capture data
+#read in the raw iso data .csv
+owl_deut <- read.csv("data/owl_dD.csv", stringsAsFactors = F)
+
+#replace two cases of missing band #s
+#UPDATE THIS - right now this just removes the last two rows...
+owl_deut <- owl_deut[1:(nrow(owl_deut)-2),] 
+
+#create new identifier that removes the beginning "o"
+id2 <- substring(owl_deut$indentifier, 2)
+
+#create a feather type column that extracts the final letter from the identifier
+owl_deut$iso_feath_type <- substr(owl_deut$indentifier,
+                                  nchar(owl_deut$indentifier), #start at last
+                                  nchar(owl_deut$indentifier)) #stop at last
+
+#write new band column with band number only
+owl_deut$band <- substr(id2,1,nchar(id2)-1)
+
+#extract band suffix and add to df
+owl_deut$suffix <- as.integer(gsub("(^\\d+\\-)","" ,owl_deut$band))
+
+#extract band prefix and add to df
+owl_deut$prefix <- as.integer(gsub("(\\-\\d+$)","" ,owl_deut$band))
 ```
 
-Lots of data cleaning and formatting...
+Next we need to merge the capture and morph datasets into the iso data set.
+
+We'll start by pulling in the fall-only data
 
 ```{r}
-#add status column to delineate known local birds and fall unknown-origin
-deut_data$status <- ifelse(deut_data$Date == "#N/A", "local", "fall") 
+#load dataset
+fall_band <- read.csv("data/fall_band.csv", stringsAsFactors = F)
+
+#merge data frames based on the 3 band columns
+owl_comb <- merge(owl_deut, fall_band, by.x = c("band", "suffix", "prefix"),
+                  by.y = c("Index.Band", "Suffix", "Prefix"), 
+                  all = T)
+
+#update status column for breeding season captures of known residents
+owl_comb$ID[is.na(owl_comb$ID)] <- "BR"
+```
+
+Next step is to bring in some necessary data from the MEF band dataset for the BR birds.
+
+```{r}
+#read in MEF band data as of 2018 field season
+mef_band <- read.csv("data/mef_band_2018.csv")
+
+#extract the rows of the MEF data whose band number match those in owl_comb
+mef_deut <- mef_band[mef_band$Band.Prefix %in% owl_comb$prefix &
+                       mef_band$Band.Suffix %in% owl_comb$suffix,]
+
+#Fill in missing age data from MEF BR birds
+#first create data frame of the sex and age values for the 26 MEF BNR birds
+missingMEF <- data.frame(
+  "Age" = mef_deut$Age[which(mef_deut$Band.Suffix %in% 
+                               owl_comb$suffix[is.na(owl_comb$PAge)])],
+  "Sex" = mef_deut$Sex[which(mef_deut$Band.Suffix %in% 
+                               owl_comb$suffix[is.na(owl_comb$Sex)])],
+  "prefix" = mef_deut$Band.Prefix[which(mef_deut$Band.Suffix %in% 
+                               owl_comb$suffix[is.na(owl_comb$Sex)])],
+  "suffix" = mef_deut$Band.Suffix[which(mef_deut$Band.Suffix %in% 
+                               owl_comb$suffix[is.na(owl_comb$Sex)])]
+  )
+
+#merge MEf birds into owl_comb  
+owl_comb <- merge(owl_comb, missingMEF, by = c("prefix", "suffix"), all.x = T, 
+                  no.dups = T)
+owl_comb$age <- ifelse(!is.na(owl_comb$PAge), owl_comb$PAge,
+                       as.character(owl_comb$Age.y))
+owl_comb$sex <- ifelse(!is.na(owl_comb$Sex.x), owl_comb$Sex.x, 
+                       as.character(owl_comb$Sex.y))
+```
+
+A bit more clening and combining - get combined age and sex columns
+
+```{r}
+#make a function to assign a "local" or "unknown" status
+makeorigin <-Vectorize(function(x) {
+  switch(x, "RA" = "local", "NR" = "local",
+                          "RY" = "local", "U" = "unknown", "F" = "unknown",
+                          "PF" = "unknown", "BR" = "local")
+  }, "x")
+
+#apply function and put results in new column of owl_comb
+owl_comb$origin <- as.factor(makeorigin(owl_comb$ID))
 
 #change date format
-deut_data$Date[deut_data$Date == "#N/A"] <- NA
-deut_data$Julian[deut_data$Julian == "#N/A"] <- NA
-deut_data$Julian <- as.numeric(deut_data$Julian)
-deut_data$Date <- as.Date(deut_data$Date, format = "%d/%m/%Y")
-morph_data$Date[morph_data$Date == "#N/A"] <- NA
-morph_data$Julian[morph_data$Julian == "#N/A"] <- NA
-morph_data$Date <- as.Date(morph_data$Date, format = "%d/%m/%Y")
-morph_data$PAge[morph_data$PAge == "2"] <- "A"
-morph_data$PAge[morph_data$PAge == "3"] <- "A"
+owl_comb$Date <- as.Date(owl_comb$Date, format = "%d/%m/%Y")
 
-#convert to factors
-deut_data$status <- as.factor(deut_data$status)
+#fix age column
+owl_comb$age[owl_comb$age == "2"] <- "AHY"
+owl_comb$age[owl_comb$age == "3"] <- "AHY"
+owl_comb$age[owl_comb$age == ""] <- NA
+owl_comb$age[owl_comb$age == "Ad"] <- "AHY"
+owl_comb$age[owl_comb$age == "AD"] <- "AHY"
+owl_comb$age[owl_comb$age == "A"] <- "AHY"
+owl_comb$age[owl_comb$age == "FL"] <- "HY"
+owl_comb$age[owl_comb$age == "L"] <- "HY"
+owl_comb$age[owl_comb$age == "Y"] <- "HY"
 ```
 
 # Compare double measured birds 
@@ -68,32 +152,43 @@ deut_data$status <- as.factor(deut_data$status)
 This section analyzes birds for which we have two feather isotope values for different feather types.  This helps us validate the use of juvenile  contour feathers in analyses that otherwise include adult remiges.
 
 ```{r}
-#extract all the double measured individuals
-#keep only duplicated bands
-doubles <- deut_data[duplicated(deut_data$Band) | duplicated(deut_data$Band, 
+#extract from the complete dataset only those individuals with dD values
+deut_data <- owl_comb[!is.na(owl_comb$dD),]
+
+#need to remove duplicated dD data for birds captured twice in a season
+deut_data <- distinct(deut_data, band, analysis, .keep_all = T)
+
+#extract all the double measured individuals by keeping only duplicated bands
+doubles <- deut_data[duplicated(deut_data$band) | duplicated(deut_data$band, 
                                                              fromLast = T),] 
 #sort by band number and then feather type
-doubles <- doubles[order(doubles$Band, doubles$FeatherType),] 
+doubles <- doubles[order(doubles$band, doubles$iso_feath_type),] 
 
-#remove single case with 2 primaries and no juv
-doubles <- filter(doubles, doubles$Band != "1833-03340") 
+# #remove single case with 2 juv feathers and no primary
+# doubles <- filter(doubles, doubles$band != "1833-03340") 
 
 #convert to factors
-doubles$Band <- as.factor(doubles$Band)
-
+doubles$band <- as.factor(doubles$band)
 ```
 
 Now we take the difference in $\delta D$ values between paired measurements from single individuals.
 
 ```{r}
 difs <- c()
-for (i in 1:length(unique(doubles$Band))) {
-  difs[i] <- doubles$dD[doubles$Band == unique(doubles$Band)[i] 
-                        & doubles$FeatherType == "j"] - doubles$dD[doubles$Band == unique(doubles$Band)[i] & 
-                                                                     doubles$FeatherType == "p"]
+for (i in 1:length(unique(doubles$band))) {
+  #first, make sure there are no records using the same feather types
+  if(any(doubles$iso_feath_type[doubles$band == 
+                                unique(doubles$band)[i]] == "j") &
+     any(doubles$iso_feath_type[doubles$band == 
+                                unique(doubles$band)[i]] == "p")){
+    difs[i] <- doubles$dD[doubles$band == unique(doubles$band)[i] 
+                          & doubles$iso_feath_type == "j"] - 
+      doubles$dD[doubles$band == unique(doubles$band)[i] &
+                   doubles$iso_feath_type == "p"]
+  } 
 }
 
-difs <- data.frame(dD = difs)
+difs <- data.frame(dD = na.omit(difs))
 
 ```
 
@@ -120,9 +215,11 @@ Inferential test (if we must...), both a paired t-test and an information theore
 #one sample t-test on the pairwise difs (paired t-test)
 t.test(x = difs) 
 
-fit.dif.int <- lmer(dD ~ 1 + (1|Band), data = doubles, REML = F)
-fit.dif.type <- lmer(dD ~ FeatherType + (1|Band), data = doubles, REML = F)
+#fit competing linear models
+fit.dif.int <- lmer(dD ~ 1 + (1|band), data = doubles, REML = F)
+fit.dif.type <- lmer(dD ~ iso_feath_type + (1|band), data = doubles, REML = F)
 
+#make AIC table
 aictab(list("intercept" = fit.dif.int, "dD by type" =fit.dif.type))
 ```
 
@@ -136,9 +233,9 @@ pal <- c("#3B9AB2", "#EBCC2A")
 
 #plot histograms with rug plot
 deut_hist <- ggplot(data = deut_data) +
-  geom_density(aes(x = dD, fill = status, color = status), alpha = .35) + 
+  geom_density(aes(x = dD, fill = origin, color = origin), alpha = .35) + 
   scale_fill_manual(values = pal) +
-  geom_rug(aes(x = dD, color = status)) +
+  geom_rug(aes(x = dD, color = origin)) +
   scale_color_manual(values = pal) +
   xlab(expression(paste(delta, "D", sep = ""))) +
   scale_y_continuous(breaks=seq(0,.06,.05)) +
@@ -146,55 +243,142 @@ deut_hist <- ggplot(data = deut_data) +
 deut_hist
 ```
 
-Again, a couple ways of looking at this inferentially.  First we can do a Kolmogorov–Smirnov  to get a p-value about these being drawn from the same population distribution.  We can also do a two-sample t test to look for differences in means.  Finally, we can again fit a couple linear models and use information theory. Also, so summary stats here.
+Again, a couple ways of looking at this inferentially.  First we can do a Kolmogorov–Smirnov  to get a p-value about these being drawn from the same population distribution.  We can also do a two-sample t test to look for differences in means.  Finally, we can again fit a couple linear models and use information theory. 
 
 ```{r}
-#inferential tests
-ks.test(x=deut_data$dD[deut_data$status == "fall"], 
-        y=deut_data$dD[deut_data$status == "local"])
+#Kolmolgorv-Smirnov Test
+ks.test(x=deut_data$dD[deut_data$origin == "unknown"], 
+        y=deut_data$dD[deut_data$origin == "local"])
 
-t.test(x=deut_data$dD[deut_data$status == "fall"], 
-        y=deut_data$dD[deut_data$status == "local"])
+#Two-sample t-test
+t.test(x=deut_data$dD[deut_data$origin == "unknown"], 
+        y=deut_data$dD[deut_data$origin == "local"])
 
+#Linear Models and Information Theoretic Selection
 fit.int <- lm(dD ~ 1, data = deut_data)
-fit.status <- lm(dD ~ status, data = deut_data)
+fit.status <- lm(dD ~ origin, data = deut_data)
 aictab(list("intercept" = fit.int, "dD by status" = fit.status))
 summary(fit.int)
 summary(fit.status)
 ```
 
-Also, so summary stats here.
+Also, some summary stats here.  
+```{r}
+summary(deut_data$dD[deut_data$origin == "unknown"])
+sd(deut_data$dD[deut_data$origin == "unknown"])
+
+summary(deut_data$dD[deut_data$origin == "local"])
+sd(deut_data$dD[deut_data$origin == "local"])
+```
+
+# Isotope Analysis by Age
+We can combine the known- and unknown-origin birds into a single pool and then separate by age to see if differential incorporation of D is related to water use efficiency of young birds.
+
+First we need to remove those values for which age is unknown.
 
 ```{r}
-summary(deut_data$dD[deut_data$status == "fall"])
-sd(deut_data$dD[deut_data$status == "fall"])
-
-summary(deut_data$dD[deut_data$status == "local"])
-sd(deut_data$dD[deut_data$status == "local"])
+deut_data_age <- deut_data[!is.na(deut_data$age),]
 ```
+
+
+```{r}
+#plot histograms with rug plot
+deut_hist_age <- ggplot(data = deut_data_age) +
+  geom_density(aes(x = dD, fill = age, color = age), alpha = .35) + 
+  scale_fill_manual(values = pal) +
+  geom_rug(aes(x = dD, color = age)) +
+  scale_color_manual(values = pal) +
+  xlab(expression(paste(delta, "D", sep = ""))) +
+  scale_y_continuous(breaks=seq(0,.06,.05)) +
+  theme_classic()
+deut_hist_age
+```
+
+We can also vizualize as a boxplot of the means.
+
+```{r}
+mean_deut_age <- ggplot(data = deut_data_age) +
+  geom_boxplot(aes(x = age, y = dD)) +
+  theme_classic()
+
+mean_deut_age
+```
+
+Ok, so the young appear to be more depleted than adults - we probably want to now re-do the local- versus unknown-origin analysis comparing adults to adults and young to young...
+
+#Known- versus unknown-origin isotopes controlling for age
+
+We'll make the same histogram as the first time but facet by age.
+
+```{r}
+#plot faceted histograms with rug plot
+deut_age_origin <- ggplot(data = deut_data_age) +
+  geom_density(aes(x = dD, fill = origin, color = origin), alpha = .35) + 
+  scale_fill_manual(values = pal) +
+  geom_rug(aes(x = dD, color = origin)) +
+  scale_color_manual(values = pal) +
+  xlab(expression(paste(delta, "D", sep = ""))) +
+  scale_y_continuous(breaks=seq(0,.06,.05)) +
+  theme_classic() +
+  facet_wrap(~age)
+
+deut_age_origin
+```
+
+We'll also re-do the information theoretic inference but add interactions for age.
+
+```{r}
+#Linear Models and Information Theoretic Selection
+fit.int <- lm(dD ~ 1, data = deut_data_age)
+fit.age <- lm(dD ~ age, data = deut_data_age)
+fit.status <- lm(dD ~ origin, data = deut_data_age)
+fit.add <- lm(dD ~ origin + age, data = deut_data_age)
+fit.interact <- lm(dD ~ origin*age, data = deut_data_age)
+
+aictab(list("intercept" = fit.int, "age" = fit.age, "origin" = fit.status,
+            "origin+age" = fit.add, "origin*age" = fit.interact))
+
+summary(fit.add)
+summary(fit.interact)
+```
+
 # Fall to Breeding Individuals
 
 Now let's look at our fall birds recaptured as breeders in subsequent years relative to the dD distributions.
 
 ```{r}
+#vector of F2S band numbers
 falltosummer <- c("1783-64429","1833-03191","1783-64490","1783-64452",
                   "1833-03104","1833-03116","1833-03309","1833-03322",
                   "1833-03307","1783-74351","1833-03329","1833-03417")
-recap_deut <- deut_data$dD[which(deut_data$Band %in% falltosummer)]
-recap_bands <- deut_data$Band[which(deut_data$Band %in% falltosummer)]
-deut_local <- deut_data[deut_data$status == "local",]
-owl <- readPNG("FLOW Line Drawing.png")
+
+#get the dD values for F2S birds
+recap_deut <- deut_data_age$dD[which(deut_data$band %in% falltosummer)]
+
+#get band numbers of the F2S birds for which we have dD values
+recap_bands <- deut_data_age$band[which(deut_data_age$band %in% falltosummer)]
+recap_iso_birds <- deut_data_age[which(deut_data_age$band %in% falltosummer),]
+recap_iso_birds
+
+#read in owl graphic and transform to rasterGrob object
+owl <- readPNG("art/FLOW Line Drawing.png")
 g1 <- rasterGrob(owl, interpolate=FALSE)
 
-deut_cap <- ggplot(data = deut_data) +
-  geom_density(aes(x = dD, fill = status, color = status), alpha = .35) + 
-  scale_fill_manual(values = pal) +
-  scale_color_manual(values = pal) +
+pal4 <- wes_palette("Zissou1", 4, "discrete")
+
+#plot
+deut_cap <- ggplot(data = deut_data_age) +
+  geom_density(aes(x = dD, fill = interaction(origin,age), 
+                   color = interaction(origin,age)), alpha = .35) + 
+  scale_fill_manual(values = pal4) +
+  scale_color_manual(values = pal4) +
   geom_vline(xintercept = recap_deut, color = "#3B9AB2", linetype = "dashed") +
-  geom_text(aes(x=recap_deut[1]-2, y = .016, label = paste0(recap_bands[1]), 
-                angle = 90)) +
-  geom_text(aes(x=recap_deut[2]-2, y = .016, label = paste0(recap_bands[2]), 
-                angle = 90)) +
+  geom_text(aes(x=recap_deut[1]-2, y = .016, 
+                label = paste0(recap_bands[1], " (", recap_iso_birds$age[1],
+                               ")"), angle = 90)) +
+  geom_text(aes(x=recap_deut[2]-2, y = .016, 
+                label = paste0(recap_bands[2], " (", recap_iso_birds$age[2],
+                               ")"), angle = 90)) +
   annotation_custom(g1, xmin=recap_deut[1]-10, xmax = recap_deut[1],
                     ymin = 0, ymax = .01) +
   annotation_custom(g1, xmin=recap_deut[2]-10, xmax = recap_deut[2], 
@@ -202,8 +386,9 @@ deut_cap <- ggplot(data = deut_data) +
   xlab(expression(paste(delta, "D", sep = ""))) +
   scale_y_continuous(breaks=seq(0,.06,.05)) +
   theme_classic()
+
 deut_cap
-ggsave("owlplot.png", dpi = 400)
+# ggsave("owlplot.png", dpi = 400)
 ```
 
 # dD by Time
@@ -211,7 +396,7 @@ We can also ask whether we see evidence of migration picking up late by consider
 
 ```{r}
 #dD by julian date
-deut_by_date <- ggplot(data = na.omit(deut_data), aes(x = Julian, y = dD)) +
+deut_by_date <- ggplot(data = deut_data, aes(x = Julian, y = dD)) +
   geom_point() +
   geom_smooth(method = "lm", color = "black") +
   ylab(expression(paste(delta, "D", sep = ""))) +
@@ -226,11 +411,14 @@ deut_by_date
 We can also run the linear model for this.
 
 ```{r}
+#make dataset without NAa
 deut_time <- deut_data[!is.na(deut_data$Julian),] #clean out missing data
 
+#fit models
 fit.notime <- lm(dD ~ 1, data = deut_time)
 fit.time <- lm(dD ~ Julian, data = deut_time)
 
+#AIC selection
 aictab(list("intercept" = fit.notime, "dD by time" = fit.time))
 summary(fit.time)
 summary(fit.notime)
@@ -238,36 +426,95 @@ summary(fit.notime)
 
 Basically two equally plausible models - interesting that the time covariate model is the best but when we look at the $\beta_1$ estimate it's basically 0 with very high SE, so no real evidence that time explains mean variation in $\delta D$.
 
+We can also separate the dD over time by age groups for age-known birds.
+
+```{r}
+#dD by julian date and age
+deut_by_date <- ggplot(data = deut_data_age, aes(x = Julian, y = dD, 
+                                                 shape = age, color = age)) +
+  geom_point() +
+  geom_smooth(method = "lm", aes(color = age)) +
+  ylab(expression(paste(delta, "D", sep = ""))) +
+  xlab("Julian Date") +
+  theme_classic()
+
+deut_by_date
+```
+
+Let's also re-run the linear models including an interaction with age.
+```{r}
+#make datset with no missing values for age or Julian 
+deut_data_age_time <- deut_data_age[!is.na(deut_data_age$Julian),]
+
+#fit models
+fit.notime <- lm(dD ~ 1, data = deut_data_age_time)
+fit.time <- lm(dD ~ Julian, data = deut_data_age_time)
+fit.timebyage <- lm(dD ~ Julian*age, data = deut_data_age_time)
+
+aictab(list("intercept" = fit.notime, "time" = fit.time, 
+            "time*age" = fit.timebyage))
+
+summary(fit.timebyage)
+ggPredict(fit.timebyage,se=TRUE) +
+  theme_classic() +
+  theme(legend())
+```
+
+
 # Passage Rates
 
+First let's load the data in and do any cleaning.
 
 ```{r}
 #need to get net hours by date to normalize this
-caps <- c()
-dates <- c()
-for(i in 1:unique(morph_data$Julian)) {
-  caps[[i]] <- sum(morph_data$Julian == unique(morph_data$Julian)[i])
-  dates[[i]] <- unique(morph_data$Julian)[i] 
-}
+caprates <- read.csv("data/nethours.csv")
 
-caprates <- data.frame("date" = dates, "captures" = caps)
+#convert year to factor
+caprates$year <- as.factor(caprates$year)
+#caprates <- caprates[-which(caprates$cap_per_hr == max(caprates$cap_per_hr)),]
+```
 
-cap_rate_plot <- ggplot(data = caprates, aes(x=date, y = captures)) +
-  geom_point(color = "black") +
-  stat_smooth(aes(y = captures),method = "lm", formula = y ~ x + I(x^2),
-              color = "black") +
-    theme_classic()
+No we can fit a set of linear models to consider any trend in capture rates over time.
+```{r}
+#Use lm and information theoretics to test hypotheses about rate
+#can't do mixed effects because too few data- models don't converge
+rate.int <- lm(cap_per_hr ~ 1, data = caprates)
+rate.lin <- lm(cap_per_hr ~ julian, data = caprates)
+rate.quad <- lm(cap_per_hr ~ poly(julian, 2, raw = T), data = caprates)
+aictab(list("intercept" = rate.int, "linear" = rate.lin, 
+            "quadratic" = rate.quad))
+summary(rate.quad)
+summary(rate.int)
+summary(rate.lin)
+
+caprates$fit <- predict(rate.quad)
+```
+
+Now we're ready to plot the rate over time and we can supply the trendline from our best model (the intercept model).
+
+```{r}
+#plot
+cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
+  geom_point(aes(shape = year), colour="black") +
+  # scale_shape_manual(values = c(1:4)) +
+  # scale_fill_manual(values = wes_palette("FantasticFox1", 4, "discrete")) +
+  geom_smooth(method = "lm", color = "black", 
+              formula = y ~ poly(x, 2, raw = T)) +
+  ylab(expression("Captures " ~ hr^{-1})) +
+  xlab("Julian Date") +
+  theme_classic()
 
 cap_rate_plot
+ggsave("figures/caprate.png", dpi = 400)
+```
+
+# Spatial Analyses
 
 
-# #violin plot of capture by date
-# sexknown <- morph_data[morph_data$Final.Sex != "U",]
-# sexknown <- sexknown[sexknown$PAge == "A",]
-# sexknown$sexyear <- paste0(sexknown$Final.Sex, sexknown$Year)
-# caps_by_sex_date <- ggplot(data = sexknown, aes(x = sexyear, y = Julian, 
-#                                                 fill = Final.Sex) +
-#   geom_violin(alpha = .3) +
-#   geom_boxplot(width = 0.2))
+
+# Session Info
+
+```{r}
+sessionInfo()
 ```
 
