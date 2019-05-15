@@ -15,17 +15,20 @@ output:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE, tidy = TRUE)
+knitr::opts_chunk$set(echo = TRUE, tidy = FALSE)
 ```
 
 
 #Required Libraries
 
 ```{r message=FALSE, warning=FALSE}
-#devtools::install_github("cardiomoon/ggiraphExtra")
+# devtools::install_github("cardiomoon/ggiraphExtra")
+# devtools::install_github('oswaldosantos/ggsn')
+# devtools::install_github("3wen/legendMap")
 
 #data mgmt
 library(tidyverse) 
+library(reshape2)
 
 #plotting
 library(ggplot2)
@@ -34,10 +37,25 @@ library(wesanderson)
 library(png)
 library(grid)
 library(ggiraphExtra)
+library(gridExtra)
 
 #inference
 library(lme4)
 library(AICcmodavg)
+
+#spatial
+library(rgdal)
+library(sf)
+library(ggspatial)
+library(ggmap)
+library(maptools)
+library(broom)
+library(tmap)
+library(ggsn)
+library(legendMap)
+
+#register google maps API key
+register_google("AIzaSyAAGi7xr7lrFO3VDYqXN_WO98vlpQSq0bQ")
 ```
 
 # Initial Data Import, Cleaning, and Management 
@@ -203,7 +221,8 @@ difs_plot <- ggplot(data = difs, aes(x = 1, y = dD)) +
   ylim(c(-25, 25)) +
   ylab(expression(paste("Difference in ", delta, "D", sep = ""))) +
   theme_classic() +
-  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(), 
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
         axis.title.x = element_blank())
 
 difs_plot
@@ -456,8 +475,7 @@ aictab(list("intercept" = fit.notime, "time" = fit.time,
 
 summary(fit.timebyage)
 ggPredict(fit.timebyage,se=TRUE) +
-  theme_classic() +
-  theme(legend())
+  theme_classic()
 ```
 
 
@@ -509,6 +527,113 @@ ggsave("figures/caprate.png", dpi = 400)
 ```
 
 # Spatial Analyses
+
+First we need to bring in the relevant data.
+
+```{r}
+#read in the recapture data
+owl_recap <- read.csv("data/recap_wide.csv")
+
+#make lines for each cap-recap pair
+recap_lines <- lapply(X=1:nrow(owl_recap), FUN = function(x) {
+  pair <- st_linestring(matrix(c(owl_recap$x_1[x], owl_recap$y_1[x],
+                     owl_recap$x_2[x], owl_recap$y_2[x]), byrow = T, 
+                     nrow = 2))
+  return(pair)
+})
+
+#format lines into sfc object
+recap_sfc <- st_sfc(recap_lines)
+
+#merge sfc object with original data.frame
+mult_recap <- st_sf(owl_recap, geom = recap_sfc, crs = 26913) %>% 
+  st_transform("+init=epsg:4326")
+
+#make points for first and second captures
+owl_first <- st_as_sf(owl_recap, coords = c("x_1", "y_1"), crs = 26913) %>%   st_transform("+init=epsg:4326")
+owl_second <- st_as_sf(owl_recap, coords = c("x_2", "y_2"), 
+                       crs = 26913) %>% 
+  st_transform("+init=epsg:4326")
+#read in the hotel gulch boundary
+hotel_bound <- st_read("gis/Hotel_Shp/hotel_boundary.shp", crs = 26913) %>% 
+  st_transform("+init=epsg:4326") 
+
+#read in trout creek boundary
+trout_bound <- st_read("gis/trout_boundary.shp", crs = 26913) %>% 
+  st_transform("+init=epsg:4326")
+
+#read in mizzou boundary
+miss_bound <- st_read("gis/missouri_boundary.shp", crs = 26913) %>% 
+  st_transform("+init=epsg:4326")
+
+#make hayman boundary
+hayman_bound <- st_sfc(st_polygon(x=list(matrix(c(476612, 4335175, 
+                         476612, 4328660, 
+                         484110, 4328660, 
+                         484110, 4335175,
+                         476612, 4335175), ncol = 2, byrow = T)))) %>% 
+  st_set_crs(26913) %>% 
+  st_transform("+init=epsg:4326")
+
+#get google maps base layer
+base <- get_googlemap(center = c(lon = -105.1, lat = 39.1), zoom = 11, 
+                      maptype ="terrain", color = "bw")
+```
+
+Make maps:
+```{r }
+#make the fall to summer map
+f2s_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
+  xlim(c(-105.1, -105)) +
+  ylim(c(39.07, 39.18)) +
+  coord_sf() +
+  geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", size = 1.25) +
+  geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", size = 1.25) +
+  geom_sf(data = mult_recap[mult_recap$cap_type == "f2s", ], 
+          inherit.aes = FALSE, color = "black") +
+  geom_sf(data = owl_first[mult_recap$cap_type == "f2s", ], 
+          inherit.aes = FALSE, shape = 15, color = "black") +
+  geom_sf(data = owl_second[mult_recap$cap_type == "f2s", ],
+          inherit.aes = FALSE, shape = 24, color = "black", fill = "#F0F8FF") +
+  ggtitle(expression(Fall %->% Resident)) +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_blank())
+
+#make summer to fall map
+s2f_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
+  xlim(c(-105.22, -105.03)) +
+  ylim(c(39.07, 39.18)) +
+  coord_sf() +
+  geom_sf(data = hayman_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", size = 1.25) +
+  geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", size = 1.25) +
+  geom_sf(data = trout_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", size = 1.25) +
+  geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", size = 1.25) +
+  geom_sf(data = mult_recap[mult_recap$cap_type == "s2f", ], 
+          inherit.aes = FALSE, color = "black") +
+  geom_sf(data = owl_first[mult_recap$cap_type == "s2f", ], 
+          inherit.aes = FALSE, shape = 15, color = "black") +
+  geom_sf(data = owl_second[mult_recap$cap_type == "s2f", ],
+          inherit.aes = FALSE, shape = 24, color = "black", fill = "#F0F8FF") +
+  scale_bar(lon = -105.2, lat = 39.07,
+            distance_lon = 2, distance_lat = 0.5, distance_legend = 1,
+            dist_unit = "km", orientation = T, arrow_length = 1,
+            arrow_distance = 1.25, arrow_north_size = 4) +
+  ggtitle(expression(Resident %->% Fall)) +
+  theme_minimal() +
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        axis.title = element_blank())
+
+grid.arrange(f2s_plot, s2f_plot, widths = c(1.1,2), nrow = 1)
+```
 
 
 
