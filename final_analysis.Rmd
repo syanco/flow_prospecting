@@ -38,6 +38,7 @@ library(png)
 library(grid)
 library(ggiraphExtra)
 library(gridExtra)
+library(egg)
 
 #inference
 library(lme4)
@@ -54,8 +55,20 @@ library(tmap)
 library(ggsn)
 library(legendMap)
 
-#register google maps API key
-register_google("AIzaSyAAGi7xr7lrFO3VDYqXN_WO98vlpQSq0bQ")
+
+```
+# Custom Functions
+
+```{r}
+annotation_custom2 <- 
+function (grob, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, data) 
+{
+  layer(data = data, stat = StatIdentity, position = PositionIdentity, 
+        geom = ggplot2:::GeomCustomAnn,
+        inherit.aes = TRUE, params = list(grob = grob, 
+                                          xmin = xmin, xmax = xmax, 
+                                          ymin = ymin, ymax = ymax))
+}
 ```
 
 # Initial Data Import, Cleaning, and Management 
@@ -137,7 +150,7 @@ owl_comb$sex <- ifelse(!is.na(owl_comb$Sex.x), owl_comb$Sex.x,
                        as.character(owl_comb$Sex.y))
 ```
 
-A bit more clening and combining - get combined age and sex columns
+A bit more cleaning and combining - get combined age and sex columns
 
 ```{r}
 #make a function to assign a "local" or "unknown" status
@@ -206,20 +219,24 @@ for (i in 1:length(unique(doubles$band))) {
   } 
 }
 
-difs <- data.frame(dD = na.omit(difs))
+difs <- data.frame(dD = na.omit(difs), 
+                   pos = seq(from = .1, by = .1,   
+                             length.out = length(na.omit(difs))))
 
 ```
 
 We now make a plot showing the distribution of differences.
 
 ```{r}
-difs_plot <- ggplot(data = difs, aes(x = 1, y = dD)) +
-  geom_boxplot(width = .2) +
-  geom_jitter(position = position_jitter(0.05)) +
-  geom_hline(yintercept = 0, linetype = "dashed") +
-  xlim(c(0.5, 1.5)) +
-  ylim(c(-25, 25)) +
-  ylab(expression(paste("Difference in ", delta, "D", sep = ""))) +
+difs_plot <- ggplot(data = difs) +
+  #geom_boxplot(width = .2) +
+  geom_point(aes(x = pos, y = dD)) +
+  geom_errorbar(aes(x = pos, y = dD, ymax = dD + 8, ymin = dD - 8), 
+                width = .1) +
+  geom_hline(yintercept = 0, linetype = "solid") +
+  #xlim(c(0.5, 1.5)) +
+  #ylim(c(-25, 25)) +
+  ylab(expression(paste("Difference in ", delta^"2", "D", sep = ""))) +
   theme_classic() +
   theme(axis.text.x = element_blank(), 
         axis.ticks.x = element_blank(), 
@@ -326,39 +343,138 @@ mean_deut_age
 Ok, so the young appear to be more depleted than adults - we probably want to now re-do the local- versus unknown-origin analysis comparing adults to adults and young to young...
 
 #Known- versus unknown-origin isotopes controlling for age
+Start by removing the double-measured unknown birds - get rid of juvenile feathers when possible
+
+```{r}
+#sort by band number and then feather type
+deut_origin <- deut_data_age[order(deut_data_age$band, 
+                                     deut_data_age$iso_feath_type),] 
+
+#extract all the double measured individuals by keeping only duplicated bands
+deut_origin <- deut_origin[!duplicated(deut_data_age$band, fromLast = T),]
+
+nrow(deut_origin[deut_origin$origin == "local",])
+nrow(deut_origin[deut_origin$origin == "unknown",])
+```
+
 
 We'll make the same histogram as the first time but facet by age.
 
 ```{r}
 #plot faceted histograms with rug plot
-deut_age_origin <- ggplot(data = deut_data_age) +
-  geom_density(aes(x = dD, fill = origin, color = origin), alpha = .35) + 
-  scale_fill_manual(values = pal) +
-  geom_rug(aes(x = dD, color = origin)) +
-  scale_color_manual(values = pal) +
-  xlab(expression(paste(delta, "D", sep = ""))) +
+deut_age_origin <- ggplot(data = deut_origin) +
+  stat_density(aes(x = dD, linetype = origin), geom="path", 
+               position = "identity") +
+  #geom_rug(aes(x = dD, color = origin)) +
+  #scale_color_manual(values = pal) +
+  xlab(expression(paste(delta^"2", "D", sep = ""))) +
   scale_y_continuous(breaks=seq(0,.06,.05)) +
   theme_classic() +
-  facet_wrap(~age)
+  facet_wrap(~age) +
+  ylab("Density") +
+  labs(linetype = "Origin")
 
 deut_age_origin
 ```
 
+## Revised Probability-based assignments
+
+First we need to get th distributional parameters of the known-orgins birds by age class.
+
+```{r}
+#pull out local only
+deut_local <- deut_origin[deut_origin$origin == "local",]
+
+mean_hy <- mean(deut_local$dD[deut_local$age == "HY"])
+sd_hy <- sd(deut_local$dD[deut_local$age == "HY"])
+
+mean_ahy <- mean(deut_local$dD[deut_local$age == "AHY"])
+sd_ahy <- sd(deut_local$dD[deut_local$age == "AHY"])
+
+param_df <- data.frame("age" = c("HY", "AHY"),
+                       "mean" = c(mean_hy, mean_ahy),
+                       "sd" = c(sd_hy, sd_ahy))
+```
+
+Now we can use those parameters to assume a normal distribution for the known-origin birds for each age class and then assess the probability of each unknown-origin individual having come from the associated known-origin distribution. First, to make this computationally simple, we'll just separate the HY from AHY birds.
+
+```{r}
+deut_hy <- deut_origin[deut_origin$age == "HY" & 
+                         deut_origin$origin == "unknown",]
+deut_ahy <- deut_origin[deut_origin$age == "AHY" & 
+                           deut_origin$origin == "unknown",]
+
+```
+
+Now we can pull the respective probabilities
+
+```{r}
+probAssign <- function(dD, mean, sd) {
+    pval <- pnorm(dD, mean = mean, sd = sd, lower.tail = F)
+}
+
+
+deut_prob_hy <- sapply(deut_hy$dD, probAssign, mean = mean_hy, sd = sd_hy)
+
+deut_prob_ahy <- sapply(deut_ahy$dD, probAssign, mean = mean_ahy, sd = sd_ahy)
+
+deut_probs <- data.frame("prob" = c(deut_prob_hy, deut_prob_ahy), 
+                         "age" = c(rep("HY", length(deut_prob_hy)),
+                             rep("AHY", length(deut_prob_ahy))),
+                         "dD" = c(deut_hy$dD, deut_ahy$dD))
+deut_probs$sig <- sapply(deut_probs$prob, function(x) {
+  if(x>= 0.975 | x <= 0.025){
+  return("sig")
+} else {
+  return("nonsig")
+}
+  
+})
+
+```
+
+```{r }
+deut_probs$dD[deut_probs$prob < .025 | deut_probs$prob > .975]
+deut_probs$prob[deut_probs$prob < .025 | deut_probs$prob > .975]
+
+```
+```{r}
+ggplot() +
+  geom_jitter(data = deut_probs, 
+              aes(y = dD, x = 0.75, shape = sig), 
+              position = position_jitter(0.05)) +
+  scale_shape_manual(values = c(16, 8)) +
+  geom_hline(data = param_df, 
+             aes(yintercept = qnorm(0.975, mean = mean, sd = sd))) +
+  geom_hline(data = param_df, 
+             aes(yintercept = qnorm(0.025, mean = mean, sd = sd))) +
+  ylab(expression(paste("Difference in ", delta, "D", sep = ""))) +
+  theme_classic() +
+  xlab("") +
+  theme(axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(),
+        legend.position = "none") +
+  facet_wrap(~age)
+```
+
+
+
+NOTE - BELOW IS DEPRECATED
 We'll also re-do the information theoretic inference but add interactions for age.
 
 ```{r}
-#Linear Models and Information Theoretic Selection
-fit.int <- lm(dD ~ 1, data = deut_data_age)
-fit.age <- lm(dD ~ age, data = deut_data_age)
-fit.status <- lm(dD ~ origin, data = deut_data_age)
-fit.add <- lm(dD ~ origin + age, data = deut_data_age)
-fit.interact <- lm(dD ~ origin*age, data = deut_data_age)
-
-aictab(list("intercept" = fit.int, "age" = fit.age, "origin" = fit.status,
-            "origin+age" = fit.add, "origin*age" = fit.interact))
-
-summary(fit.add)
-summary(fit.interact)
+# #Linear Models and Information Theoretic Selection
+# fit.int <- lm(dD ~ 1, data = deut_data_age)
+# fit.age <- lm(dD ~ age, data = deut_data_age)
+# fit.status <- lm(dD ~ origin, data = deut_data_age)
+# fit.add <- lm(dD ~ origin + age, data = deut_data_age)
+# fit.interact <- lm(dD ~ origin*age, data = deut_data_age)
+# 
+# aictab(list("intercept" = fit.int, "age" = fit.age, "origin" = fit.status,
+#             "origin+age" = fit.add, "origin*age" = fit.interact))
+# 
+# summary(fit.add)
+# summary(fit.interact)
 ```
 
 # Fall to Breeding Individuals
@@ -370,41 +486,61 @@ Now let's look at our fall birds recaptured as breeders in subsequent years rela
 falltosummer <- c("1783-64429","1833-03191","1783-64490","1783-64452",
                   "1833-03104","1833-03116","1833-03309","1833-03322",
                   "1833-03307","1783-74351","1833-03329","1833-03417")
-
-#get the dD values for F2S birds
-recap_deut <- deut_data_age$dD[which(deut_data$band %in% falltosummer)]
-
-#get band numbers of the F2S birds for which we have dD values
-recap_bands <- deut_data_age$band[which(deut_data_age$band %in% falltosummer)]
-recap_iso_birds <- deut_data_age[which(deut_data_age$band %in% falltosummer),]
-recap_iso_birds
-
 #read in owl graphic and transform to rasterGrob object
 owl <- readPNG("art/FLOW Line Drawing.png")
-g1 <- rasterGrob(owl, interpolate=FALSE)
+imgl <- list(owl, owl)
+#g1 <- rasterGrob(owl, interpolate=FALSE)
+#get the dD values for F2S birds
+recap_deut <- deut_data$dD[which(deut_data$band %in% falltosummer)]
+recap_deut <- data.frame(deut = recap_deut, age = c("HY", "AHY"))
+#need to reverse order for faceting below
+recap_deut <- recap_deut[nrow(recap_deut):1,]
+recap_deut$pic <- I(imgl)
+
+#get band numbers of the F2S birds for which we have dD values
+recap_bands <- data.frame(bands = deut_data$band[which(deut_data$band %in%
+                                                         falltosummer)])
+recap_bands <- data.frame(bands = recap_bands, age = c("HY", "AHY"))
+
+#need to reverse order for faceting below
+
+#recap_bands <- recap_bands[nrow(recap_bands):1,]
+
+recap_iso_birds <- deut_data[which(deut_data$band %in% falltosummer),]
+recap_iso_birds
+
+deut_data_age$age <- factor(deut_data_age$age)
+
+
 
 pal4 <- wes_palette("Zissou1", 4, "discrete")
+```
 
+```{r}
 #plot
-deut_cap <- ggplot(data = deut_data_age) +
-  geom_density(aes(x = dD, fill = interaction(origin,age), 
-                   color = interaction(origin,age)), alpha = .35) + 
-  scale_fill_manual(values = pal4) +
-  scale_color_manual(values = pal4) +
-  geom_vline(xintercept = recap_deut, color = "#3B9AB2", linetype = "dashed") +
-  geom_text(aes(x=recap_deut[1]-2, y = .016, 
-                label = paste0(recap_bands[1], " (", recap_iso_birds$age[1],
-                               ")"), angle = 90)) +
-  geom_text(aes(x=recap_deut[2]-2, y = .016, 
-                label = paste0(recap_bands[2], " (", recap_iso_birds$age[2],
-                               ")"), angle = 90)) +
-  annotation_custom(g1, xmin=recap_deut[1]-10, xmax = recap_deut[1],
-                    ymin = 0, ymax = .01) +
-  annotation_custom(g1, xmin=recap_deut[2]-10, xmax = recap_deut[2], 
-                    ymin = 0, ymax = .01) +
+deut_cap <- ggplot() +
+  stat_density(data = deut_origin, 
+               aes(x = dD, linetype = origin), geom = "path",
+               position = "identity") +
+  facet_wrap(~age, scales = "free_x") +
+  # scale_fill_manual(values = pal4) +
+  # scale_color_manual(values = pal4) +
+  geom_vline(data = recap_deut, aes(xintercept = deut), linetype = "dashed") +
+  # geom_text(data = recap_deut, aes(x=deut-4, y = .016, 
+  #               label = paste0(recap_bands$bands, " (",
+  #                              recap_iso_birds$age,
+  #                              ")"), angle = 90)) +
+  # annotation_custom(g1,  xmin=c(-90, -70), xmax = c(-50, -50),
+  #                   ymin = 0, ymax = .01) +
+  # # annotation_custom(g1, xmin=recap_deut$deut[2]-10, xmax = recap_deut$deut[2], 
+  #                   ymin = 0, ymax = .01) +
+  geom_custom(data = recap_deut, aes(data = pic, x = deut+7), y = .001, 
+              grob_fun = rasterGrob, fun_params = list(height= unit(1, "cm"))) +
   xlab(expression(paste(delta, "D", sep = ""))) +
   scale_y_continuous(breaks=seq(0,.06,.05)) +
-  theme_classic()
+  ylab("Density") +
+  labs(linetype = "Origin") +
+  theme_classic() 
 
 deut_cap
 # ggsave("owlplot.png", dpi = 400)
@@ -418,10 +554,11 @@ We can also ask whether we see evidence of migration picking up late by consider
 deut_by_date <- ggplot(data = deut_data, aes(x = Julian, y = dD)) +
   geom_point() +
   geom_smooth(method = "lm", color = "black") +
-  ylab(expression(paste(delta, "D", sep = ""))) +
+  geom_hline(yintercept = mean(deut_data$dD), linetype = "dashed") +
+  ylab(expression(paste(delta ^"2", "D", sep = ""))) +
   xlab("Julian Date") +
-  scale_y_continuous(breaks=c(-85,-65,-45)) +
-  scale_x_continuous(breaks=c(244,249,255)) +
+  scale_y_continuous(breaks=c(-85,-65,-45, -25)) +
+  #scale_x_continuous(breaks=c(244,249,255)) +
   theme_classic()
 
 deut_by_date
@@ -434,13 +571,17 @@ We can also run the linear model for this.
 deut_time <- deut_data[!is.na(deut_data$Julian),] #clean out missing data
 
 #fit models
-fit.notime <- lm(dD ~ 1, data = deut_time)
-fit.time <- lm(dD ~ Julian, data = deut_time)
+fit.notime <- lm(Julian ~ 1, data = deut_time)
+fit.time <- lm(Julian ~ dD, data = deut_time)
+# fit.age <- lm(Julian ~ age, data = deut_time)
+#only 5 observations
+ 
 
 #AIC selection
-aictab(list("intercept" = fit.notime, "dD by time" = fit.time))
+aictab(list("intercept" = fit.notime, "time by dD" = fit.time))
 summary(fit.time)
 summary(fit.notime)
+# summary(fit.age)
 ```
 
 Basically two equally plausible models - interesting that the time covariate model is the best but when we look at the $\beta_1$ estimate it's basically 0 with very high SE, so no real evidence that time explains mean variation in $\delta D$.
@@ -479,6 +620,68 @@ ggPredict(fit.timebyage,se=TRUE) +
 ```
 
 
+# Sex and age ratios
+
+```{r}
+owl_comb$sex[owl_comb$sex == "?"] <- "U"
+agesex <- ggplot(data = owl_comb[!is.na(owl_comb$age),]) +
+  geom_mosaic(aes(x = product(sex, age), fill = sex)) +
+  scale_fill_grey(start = 0, end = .9) + 
+  theme_bw()
+agesex
+
+```
+
+```{r}
+#total records
+tot <- nrow(owl_comb)
+
+#total fall
+f <- sum(owl_comb$origin == "unknown")
+f
+#num HY
+fhy <-sum(na.omit(owl_comb$age == "HY" & owl_comb$origin == "unknown"))
+fhy
+#num AHY
+fahy <- sum(na.omit(owl_comb$age == "AHY" & owl_comb$origin == "unknown"))
+fahy
+#num unk
+funk <- sum(is.na(owl_comb$age[owl_comb$origin == "unknown"]))
+funk
+
+fhy/f
+
+fahy/f
+
+funk/f
+
+#sex breakdown
+sum(na.omit(owl_comb$age == "AHY" & owl_comb$sex == "F" 
+            & owl_comb$origin == "unknown"))
+sum(na.omit(owl_comb$age == "AHY" & owl_comb$sex == "M" 
+            & owl_comb$origin == "unknown"))
+
+```
+
+```{r}
+ggplot(data = owl_comb[owl_comb$origin == "unknown" & !is.na(owl_comb$age),]) +
+  geom_boxplot(aes(x = age, y = Julian))
+
+ggplot(data = owl_comb[owl_comb$origin == "unknown" & !is.na(owl_comb$sex),]) +
+  geom_boxplot(aes(x = sex, y = Julian))
+
+median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
+                                 owl_comb$age == "HY"]))
+median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
+                                 owl_comb$age == "AHY"]))
+
+median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
+                                 owl_comb$sex == "M"]))
+median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
+                                 owl_comb$sex == "F"]))
+
+```
+
 # Passage Rates
 
 First let's load the data in and do any cleaning.
@@ -489,7 +692,9 @@ caprates <- read.csv("data/nethours.csv")
 
 #convert year to factor
 caprates$year <- as.factor(caprates$year)
-#caprates <- caprates[-which(caprates$cap_per_hr == max(caprates$cap_per_hr)),]
+
+#remove outlier due to very short net run
+caprates <- caprates[-which(caprates$cap_per_hr == max(caprates$cap_per_hr)),]
 ```
 
 No we can fit a set of linear models to consider any trend in capture rates over time.
@@ -513,11 +718,11 @@ Now we're ready to plot the rate over time and we can supply the trendline from 
 ```{r}
 #plot
 cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
-  geom_point(aes(shape = year), colour="black") +
+  geom_point(aes(group = year, shape = year), colour="black") +
   # scale_shape_manual(values = c(1:4)) +
   # scale_fill_manual(values = wes_palette("FantasticFox1", 4, "discrete")) +
-  geom_smooth(method = "lm", color = "black", 
-              formula = y ~ poly(x, 2, raw = T)) +
+  geom_smooth(method = "lm", color = "black",
+             formula = y ~ poly(x, 2, raw = T)) +
   ylab(expression("Captures " ~ hr^{-1})) +
   xlab("Julian Date") +
   theme_classic()
@@ -566,6 +771,10 @@ trout_bound <- st_read("gis/trout_boundary.shp", crs = 26913) %>%
 miss_bound <- st_read("gis/missouri_boundary.shp", crs = 26913) %>% 
   st_transform("+init=epsg:4326")
 
+#add hotel territories
+hotel_terr <- st_read("gis/hotel_territories_2016.shp", crs = 26913) %>%
+  st_transform(crs = 4326)
+
 #make hayman boundary
 hayman_bound <- st_sfc(st_polygon(x=list(matrix(c(476612, 4335175, 
                          476612, 4328660, 
@@ -575,8 +784,13 @@ hayman_bound <- st_sfc(st_polygon(x=list(matrix(c(476612, 4335175,
   st_set_crs(26913) %>% 
   st_transform("+init=epsg:4326")
 
+#net locations
+nets <- read.csv("data/net_locs.csv")
+nets_sf <- st_as_sf(nets, coords = c("x", "y"), crs = 26913) %>%
+  st_transform(crs = 4326)
+
 #get google maps base layer
-base <- get_googlemap(center = c(lon = -105.1, lat = 39.1), zoom = 11, 
+base <- get_map(center = c(lon = -105.1, lat = 39.1), zoom = 11, 
                       maptype ="terrain", color = "bw")
 ```
 
@@ -588,15 +802,21 @@ f2s_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   ylim(c(39.07, 39.18)) +
   coord_sf() +
   geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = mult_recap[mult_recap$cap_type == "f2s", ], 
           inherit.aes = FALSE, color = "black") +
   geom_sf(data = owl_first[mult_recap$cap_type == "f2s", ], 
           inherit.aes = FALSE, shape = 15, color = "black") +
   geom_sf(data = owl_second[mult_recap$cap_type == "f2s", ],
           inherit.aes = FALSE, shape = 24, color = "black", fill = "#F0F8FF") +
+  geom_text(aes(x = -105.05, y = 39.17, label = "MG")) +
+  geom_text(aes(x = -105.05, y = 39.11, label = "HG")) +
+  geom_text(aes(x = -105.225, y = 39.175, label = "HF")) +
+  geom_text(aes(x = -105.12, y = 39.055, label = "TC")) +
+  north(x.min = -105.1, x.max = -105.0, y.min = 39.07, y.max = 39.18, 
+        location = "bottomleft") +
   ggtitle(expression(Fall %->% Resident)) +
   theme_minimal() +
   theme(axis.text = element_blank(),
@@ -609,23 +829,29 @@ s2f_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   ylim(c(39.07, 39.18)) +
   coord_sf() +
   geom_sf(data = hayman_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = trout_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = mult_recap[mult_recap$cap_type == "s2f", ], 
           inherit.aes = FALSE, color = "black") +
   geom_sf(data = owl_first[mult_recap$cap_type == "s2f", ], 
           inherit.aes = FALSE, shape = 15, color = "black") +
   geom_sf(data = owl_second[mult_recap$cap_type == "s2f", ],
           inherit.aes = FALSE, shape = 24, color = "black", fill = "#F0F8FF") +
-  scale_bar(lon = -105.2, lat = 39.07,
-            distance_lon = 2, distance_lat = 0.5, distance_legend = 1,
-            dist_unit = "km", orientation = T, arrow_length = 1,
-            arrow_distance = 1.25, arrow_north_size = 4) +
+  geom_text(aes(x = -105.05, y = 39.17, label = "MG")) +
+  geom_text(aes(x = -105.05, y = 39.11, label = "HG")) +
+  geom_text(aes(x = -105.21, y = 39.175, label = "HF")) +
+  geom_text(aes(x = -105.12, y = 39.055, label = "TC")) +
+  scalebar(x.min = -105.22, x.max = -105.03, y.min = 39.07, y.max = 39.18, 
+           dist = 4, dist_unit = "km", st.bottom = FALSE, 
+           st.color = "black", transform = TRUE, model = "WGS84", 
+           st.dist = .05) +
+  # north(x.min = -105.3, x.max = -105.0, y.min = 39.0, y.max = 39.18, 
+  #       location = "bottomleft") +
   ggtitle(expression(Resident %->% Fall)) +
   theme_minimal() +
   theme(axis.text = element_blank(),
@@ -633,6 +859,68 @@ s2f_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
         axis.title = element_blank())
 
 grid.arrange(f2s_plot, s2f_plot, widths = c(1.1,2), nrow = 1)
+```
+
+Make study area map
+
+```{r}
+study_areas <- ggmap(base, darken = c(.3,"#FFFFFF")) +
+  coord_sf() +
+  geom_sf(data = hayman_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", color = "black", size = 1.25) +
+  geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", color = "black", size = 1.25) +
+  geom_sf(data = trout_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", color = "black", size = 1.25) +
+  geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", color = "black", size = 1.25) +
+  # geom_text(aes(x = -105.05, y = 39.17, label = "MG")) +
+  # geom_text(aes(x = -105.05, y = 39.11, label = "HG")) +
+  # geom_text(aes(x = -105.225, y = 39.175, label = "HF")) +
+  # geom_text(aes(x = -105.12, y = 39.055, label = "TC")) +
+  scalebar(x.min = -105.3, x.max = -105.0, y.min = 39.0, y.max = 39.18, 
+           dist = 4, dist_unit = "km", st.bottom = FALSE, 
+           st.color = "black", transform = TRUE, model = "WGS84", 
+           st.dist = .05) +
+  north(x.min = -105.3, x.max = -105.0, y.min = 39.0, y.max = 39.18, 
+        location = "bottomleft") +
+  scale_x_continuous(limits = c(-105.3, -105.0), 
+                     breaks = seq(-105.3, -105.0, .2)) +
+  scale_y_continuous(limits = c(39.0, 39.18), breaks = seq(39.0, 39.18, .1))
+
+net_sites <- ggmap(base, darken = c(.3,"#FFFFFF")) +
+  coord_sf() +
+  geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
+          linetype = "twodash", color = "black", size = 1.25) +
+  geom_sf(data = hotel_terr, inherit.aes = FALSE, size = 1, color = "black",
+          fill = NA) +
+  geom_sf(data = nets_sf, inherit.aes = F, shape = 15, size = 4) +
+  scalebar(x.min = -105.07, x.max = -105.025, y.min = 39.078, y.max = 39.106, 
+           dist = 1, dist_unit = "km", st.bottom = FALSE, 
+           st.color = "black", transform = TRUE, model = "WGS84", 
+           st.dist = .04) +
+  north(x.min = -105.07, x.max = -105.025, y.min = 39.07, y.max = 39.106, 
+        location = "bottomleft") +
+  scale_x_continuous(limits = c(-105.07, -105.025), 
+                     breaks = seq(-105.07, -105.03, .02)) +
+  scale_y_continuous(limits = c(39.078, 39.106), 
+                     breaks = seq(39.08, 39.107, .01))
+
+
+study_areas
+net_sites
+
+```
+
+Make function to calculate straight-line distance from X,Y coords (pythagorean theorem and such...)
+
+```{r}
+calc_dist <- function(x_1, y_1, x_2, y_2) {
+  x_dist <- abs(x_1-x_2)
+  y_dist <- abs(y_1-y_2)
+  dist <- sqrt((x_dist^2)+(y_dist^2))
+  return(dist)
+  }
 ```
 
 
