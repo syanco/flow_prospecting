@@ -39,6 +39,7 @@ library(grid)
 library(ggiraphExtra)
 library(gridExtra)
 library(egg)
+library(ggthemes)
 
 #inference
 library(lme4)
@@ -54,22 +55,46 @@ library(broom)
 library(tmap)
 library(ggsn)
 library(legendMap)
+library(rnaturalearth)
+library(rnaturalearthdata)
 
 
 ```
+
 # Custom Functions
 
 ```{r}
+#add custom annotations to ggplots
 annotation_custom2 <- 
-function (grob, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, data) 
-{
-  layer(data = data, stat = StatIdentity, position = PositionIdentity, 
-        geom = ggplot2:::GeomCustomAnn,
-        inherit.aes = TRUE, params = list(grob = grob, 
-                                          xmin = xmin, xmax = xmax, 
-                                          ymin = ymin, ymax = ymax))
+  function (grob, xmin = -Inf, xmax = Inf, ymin = -Inf, ymax = Inf, data) 
+  {
+    layer(data = data, stat = StatIdentity, position = PositionIdentity, 
+          geom = ggplot2:::GeomCustomAnn,
+          inherit.aes = TRUE, params = list(grob = grob, 
+                                            xmin = xmin, xmax = xmax, 
+                                            ymin = ymin, ymax = ymax))
+  }
+
+#Make function to calculate straight-line distance from X,Y coords 
+calc_dist <- function(x_1, y_1, x_2, y_2) {
+  x_dist <- abs(x_1-x_2)
+  y_dist <- abs(y_1-y_2)
+  dist <- sqrt((x_dist^2)+(y_dist^2))
+  return(dist)
 }
+
+#get pvalue from a given normal distribution
+probAssign <- function(dD, mean, sd) {
+  pval <- pnorm(dD, mean = mean, sd = sd, lower.tail = F)
+}
+
 ```
+
+```{r}
+#create color palette
+pal <- c("#3B9AB2", "#EBCC2A")
+```
+
 
 # Initial Data Import, Cleaning, and Management 
 
@@ -101,9 +126,7 @@ owl_deut$suffix <- as.integer(gsub("(^\\d+\\-)","" ,owl_deut$band))
 owl_deut$prefix <- as.integer(gsub("(\\-\\d+$)","" ,owl_deut$band))
 ```
 
-Next we need to merge the capture and morph datasets into the iso data set.
-
-We'll start by pulling in the fall-only data
+Merge the capture and morph datasets into the isotope data set - start by pulling in the fall-only data
 
 ```{r}
 #load dataset
@@ -136,10 +159,10 @@ missingMEF <- data.frame(
   "Sex" = mef_deut$Sex[which(mef_deut$Band.Suffix %in% 
                                owl_comb$suffix[is.na(owl_comb$Sex)])],
   "prefix" = mef_deut$Band.Prefix[which(mef_deut$Band.Suffix %in% 
-                               owl_comb$suffix[is.na(owl_comb$Sex)])],
+                                          owl_comb$suffix[is.na(owl_comb$Sex)])],
   "suffix" = mef_deut$Band.Suffix[which(mef_deut$Band.Suffix %in% 
-                               owl_comb$suffix[is.na(owl_comb$Sex)])]
-  )
+                                          owl_comb$suffix[is.na(owl_comb$Sex)])]
+)
 
 #merge MEf birds into owl_comb  
 owl_comb <- merge(owl_comb, missingMEF, by = c("prefix", "suffix"), all.x = T, 
@@ -156,9 +179,9 @@ A bit more cleaning and combining - get combined age and sex columns
 #make a function to assign a "local" or "unknown" status
 makeorigin <-Vectorize(function(x) {
   switch(x, "RA" = "local", "NR" = "local",
-                          "RY" = "local", "U" = "unknown", "F" = "unknown",
-                          "PF" = "unknown", "BR" = "local")
-  }, "x")
+         "RY" = "local", "U" = "unknown", "F" = "unknown",
+         "PF" = "unknown", "BR" = "local")
+}, "x")
 
 #apply function and put results in new column of owl_comb
 owl_comb$origin <- as.factor(makeorigin(owl_comb$ID))
@@ -180,7 +203,7 @@ owl_comb$age[owl_comb$age == "Y"] <- "HY"
 
 # Compare double measured birds 
 
-This section analyzes birds for which we have two feather isotope values for different feather types.  This helps us validate the use of juvenile  contour feathers in analyses that otherwise include adult remiges.
+This section analyzes birds for which we have two feather isotope values for different feather types.  This helps us evaluate the use of juvenile contour feathers in analyses that otherwise include adult remiges.
 
 ```{r}
 #extract from the complete dataset only those individuals with dD values
@@ -225,140 +248,65 @@ difs <- data.frame(dD = na.omit(difs),
 
 ```
 
+Descriptive numbers:
+
+```{r}
+max(abs(difs$dD))
+min(abs(difs$dD))
+```
+
 We now make a plot showing the distribution of differences.
 
 ```{r}
-difs_plot <- ggplot(data = difs) +
-  #geom_boxplot(width = .2) +
-  geom_point(aes(x = pos, y = dD)) +
-  geom_errorbar(aes(x = pos, y = dD, ymax = dD + 8, ymin = dD - 8), 
-                width = .1) +
-  geom_hline(yintercept = 0, linetype = "solid") +
-  #xlim(c(0.5, 1.5)) +
-  #ylim(c(-25, 25)) +
-  ylab(expression(paste("Difference in ", delta^"2", "D", sep = ""))) +
-  theme_classic() +
-  theme(axis.text.x = element_blank(), 
-        axis.ticks.x = element_blank(), 
-        axis.title.x = element_blank())
+(difs_plot <- ggplot(data = difs) +
+   #geom_jitter(aes(x = 1, y = dD), width = .1) +
+   geom_point(aes(x = pos, y = dD)) +
+   geom_errorbar(aes(x = pos, y = dD, ymax = dD + 8, ymin = dD - 8),
+                 width = .1) +
+   geom_hline(yintercept = 0, linetype = "dashed") +
+   #xlim(c(0.5, 1.5)) +
+   ylim(c(-30, 30)) +
+   ylab(expression(paste("Difference in ", delta^"2", "D", sep = ""))) +
+   theme_classic() +
+   theme(axis.text.x = element_blank(), 
+         axis.ticks.x = element_blank(), 
+         axis.title.x = element_blank()))
 
-difs_plot
+ggsave(difs_plot, file = "figures/difs_plot.png", dpi = 400)
 ```
-
-Inferential test (if we must...), both a paired t-test and an information theoretic approach.
-
-```{r}
-#one sample t-test on the pairwise difs (paired t-test)
-t.test(x = difs) 
-
-#fit competing linear models
-fit.dif.int <- lmer(dD ~ 1 + (1|band), data = doubles, REML = F)
-fit.dif.type <- lmer(dD ~ iso_feath_type + (1|band), data = doubles, REML = F)
-
-#make AIC table
-aictab(list("intercept" = fit.dif.int, "dD by type" =fit.dif.type))
-```
-
-We can clearly see that the t-test showed a high probability of the null hypothesis (no mean pairwise differences between feather types) producing results as or more unusual than ours.  Similarly, the information theoretic approach showed that the most competitive model was intercept only (akin the the null model) and had 78% of the model weighting.  Thee inferences are consistent with our figure and we conclude that the feather type is inconsequential for juvenile birds.
 
 # Isotope analyis for known- and unknown-origin birds
-
-```{r}
-#create color palette
-pal <- c("#3B9AB2", "#EBCC2A")
-
-#plot histograms with rug plot
-deut_hist <- ggplot(data = deut_data) +
-  geom_density(aes(x = dD, fill = origin, color = origin), alpha = .35) + 
-  scale_fill_manual(values = pal) +
-  geom_rug(aes(x = dD, color = origin)) +
-  scale_color_manual(values = pal) +
-  xlab(expression(paste(delta, "D", sep = ""))) +
-  scale_y_continuous(breaks=seq(0,.06,.05)) +
-  theme_classic()
-deut_hist
-```
-
-Again, a couple ways of looking at this inferentially.  First we can do a Kolmogorov–Smirnov  to get a p-value about these being drawn from the same population distribution.  We can also do a two-sample t test to look for differences in means.  Finally, we can again fit a couple linear models and use information theory. 
-
-```{r}
-#Kolmolgorv-Smirnov Test
-ks.test(x=deut_data$dD[deut_data$origin == "unknown"], 
-        y=deut_data$dD[deut_data$origin == "local"])
-
-#Two-sample t-test
-t.test(x=deut_data$dD[deut_data$origin == "unknown"], 
-        y=deut_data$dD[deut_data$origin == "local"])
-
-#Linear Models and Information Theoretic Selection
-fit.int <- lm(dD ~ 1, data = deut_data)
-fit.status <- lm(dD ~ origin, data = deut_data)
-aictab(list("intercept" = fit.int, "dD by status" = fit.status))
-summary(fit.int)
-summary(fit.status)
-```
-
-Also, some summary stats here.  
-```{r}
-summary(deut_data$dD[deut_data$origin == "unknown"])
-sd(deut_data$dD[deut_data$origin == "unknown"])
-
-summary(deut_data$dD[deut_data$origin == "local"])
-sd(deut_data$dD[deut_data$origin == "local"])
-```
-
-# Isotope Analysis by Age
-We can combine the known- and unknown-origin birds into a single pool and then separate by age to see if differential incorporation of D is related to water use efficiency of young birds.
-
-First we need to remove those values for which age is unknown.
+First we need to remove those values for which age is unknown since AHy and HY have differnet dD values.
 
 ```{r}
 deut_data_age <- deut_data[!is.na(deut_data$age),]
 ```
 
-
-```{r}
-#plot histograms with rug plot
-deut_hist_age <- ggplot(data = deut_data_age) +
-  geom_density(aes(x = dD, fill = age, color = age), alpha = .35) + 
-  scale_fill_manual(values = pal) +
-  geom_rug(aes(x = dD, color = age)) +
-  scale_color_manual(values = pal) +
-  xlab(expression(paste(delta, "D", sep = ""))) +
-  scale_y_continuous(breaks=seq(0,.06,.05)) +
-  theme_classic()
-deut_hist_age
-```
-
-We can also vizualize as a boxplot of the means.
-
-```{r}
-mean_deut_age <- ggplot(data = deut_data_age) +
-  geom_boxplot(aes(x = age, y = dD)) +
-  theme_classic()
-
-mean_deut_age
-```
-
-Ok, so the young appear to be more depleted than adults - we probably want to now re-do the local- versus unknown-origin analysis comparing adults to adults and young to young...
-
-#Known- versus unknown-origin isotopes controlling for age
 Start by removing the double-measured unknown birds - get rid of juvenile feathers when possible
 
 ```{r}
 #sort by band number and then feather type
 deut_origin <- deut_data_age[order(deut_data_age$band, 
-                                     deut_data_age$iso_feath_type),] 
+                                   deut_data_age$iso_feath_type),] 
 
 #extract all the double measured individuals by keeping only duplicated bands
 deut_origin <- deut_origin[!duplicated(deut_data_age$band, fromLast = T),]
 
+#print some sub-sample sizes
+#local and unknown birds with isos
 nrow(deut_origin[deut_origin$origin == "local",])
 nrow(deut_origin[deut_origin$origin == "unknown",])
+
+#age breakdown of local birds
+nrow(deut_origin[deut_origin$origin == "local" & deut_origin$age == "HY",])
+nrow(deut_origin[deut_origin$origin == "local"& deut_origin$age == "AHY",])
+
+#age breakdown of unknown birds
+nrow(deut_origin[deut_origin$origin == "unknown" & deut_origin$age == "HY",])
+nrow(deut_origin[deut_origin$origin == "unknown"& deut_origin$age == "AHY",])
 ```
 
-
-We'll make the same histogram as the first time but facet by age.
+Histograms of dD by origin, facet by age.
 
 ```{r}
 #plot faceted histograms with rug plot
@@ -377,9 +325,9 @@ deut_age_origin <- ggplot(data = deut_origin) +
 deut_age_origin
 ```
 
-## Revised Probability-based assignments
+## Probability-based assignments
 
-First we need to get th distributional parameters of the known-orgins birds by age class.
+First we need to get the distributional parameters of the known-orgins birds by age class.
 
 ```{r}
 #pull out local only
@@ -402,32 +350,27 @@ Now we can use those parameters to assume a normal distribution for the known-or
 deut_hy <- deut_origin[deut_origin$age == "HY" & 
                          deut_origin$origin == "unknown",]
 deut_ahy <- deut_origin[deut_origin$age == "AHY" & 
-                           deut_origin$origin == "unknown",]
+                          deut_origin$origin == "unknown",]
 
 ```
 
 Now we can pull the respective probabilities
 
 ```{r}
-probAssign <- function(dD, mean, sd) {
-    pval <- pnorm(dD, mean = mean, sd = sd, lower.tail = F)
-}
-
-
 deut_prob_hy <- sapply(deut_hy$dD, probAssign, mean = mean_hy, sd = sd_hy)
 
 deut_prob_ahy <- sapply(deut_ahy$dD, probAssign, mean = mean_ahy, sd = sd_ahy)
 
 deut_probs <- data.frame("prob" = c(deut_prob_hy, deut_prob_ahy), 
                          "age" = c(rep("HY", length(deut_prob_hy)),
-                             rep("AHY", length(deut_prob_ahy))),
+                                   rep("AHY", length(deut_prob_ahy))),
                          "dD" = c(deut_hy$dD, deut_ahy$dD))
 deut_probs$sig <- sapply(deut_probs$prob, function(x) {
   if(x>= 0.975 | x <= 0.025){
-  return("sig")
-} else {
-  return("nonsig")
-}
+    return("sig")
+  } else {
+    return("nonsig")
+  }
   
 })
 
@@ -438,17 +381,29 @@ deut_probs$dD[deut_probs$prob < .025 | deut_probs$prob > .975]
 deut_probs$prob[deut_probs$prob < .025 | deut_probs$prob > .975]
 
 ```
+
 ```{r}
 ggplot() +
   geom_jitter(data = deut_probs, 
-              aes(y = dD, x = 0.75, shape = sig), 
-              position = position_jitter(0.05)) +
+              aes(y = dD, x = 0.5, shape = sig), 
+              position = position_jitter(0.4)) +
   scale_shape_manual(values = c(16, 8)) +
-  geom_hline(data = param_df, 
-             aes(yintercept = qnorm(0.975, mean = mean, sd = sd))) +
-  geom_hline(data = param_df, 
-             aes(yintercept = qnorm(0.025, mean = mean, sd = sd))) +
-  ylab(expression(paste("Difference in ", delta, "D", sep = ""))) +
+  geom_segment(data = param_df, 
+               aes(x = .1, xend = 1, y = qnorm(0.975, mean = mean, sd = sd), 
+                   yend = qnorm(0.975, mean = mean, sd = sd)), 
+               linetype = "twodash", xmin = .1) +
+  
+  # geom_hline(data = param_df, 
+  #            aes(yintercept = qnorm(0.975, mean = mean, sd = sd)), 
+  #            linetype = "twodash", xmin = .1) +
+  # geom_hline(data = param_df, 
+  #            aes(yintercept = qnorm(0.025, mean = mean, sd = sd)), 
+  #            linetype = "twodash") +
+  geom_segment(data = param_df, 
+               aes(y = qnorm(0.025, mean = mean, sd = sd), 
+                   yend = qnorm(0.025, mean = mean, sd = sd), x = .1, xend = 1), 
+               linetype = "twodash") +
+  ylab(expression(paste(delta, "D", sep = ""))) +
   theme_classic() +
   xlab("") +
   theme(axis.text.x = element_blank(), 
@@ -457,29 +412,9 @@ ggplot() +
   facet_wrap(~age)
 ```
 
-
-
-NOTE - BELOW IS DEPRECATED
-We'll also re-do the information theoretic inference but add interactions for age.
-
-```{r}
-# #Linear Models and Information Theoretic Selection
-# fit.int <- lm(dD ~ 1, data = deut_data_age)
-# fit.age <- lm(dD ~ age, data = deut_data_age)
-# fit.status <- lm(dD ~ origin, data = deut_data_age)
-# fit.add <- lm(dD ~ origin + age, data = deut_data_age)
-# fit.interact <- lm(dD ~ origin*age, data = deut_data_age)
-# 
-# aictab(list("intercept" = fit.int, "age" = fit.age, "origin" = fit.status,
-#             "origin+age" = fit.add, "origin*age" = fit.interact))
-# 
-# summary(fit.add)
-# summary(fit.interact)
-```
-
 # Fall to Breeding Individuals
 
-Now let's look at our fall birds recaptured as breeders in subsequent years relative to the dD distributions.
+Fall birds recaptured as breeders in subsequent years relative to the dD distributions.
 
 ```{r}
 #vector of F2S band numbers
@@ -511,57 +446,55 @@ recap_iso_birds
 
 deut_data_age$age <- factor(deut_data_age$age)
 
-
-
 pal4 <- wes_palette("Zissou1", 4, "discrete")
 ```
 
 ```{r}
 #plot
-deut_cap <- ggplot() +
-  stat_density(data = deut_origin, 
-               aes(x = dD, linetype = origin), geom = "path",
-               position = "identity") +
-  facet_wrap(~age, scales = "free_x") +
-  # scale_fill_manual(values = pal4) +
-  # scale_color_manual(values = pal4) +
-  geom_vline(data = recap_deut, aes(xintercept = deut), linetype = "dashed") +
-  # geom_text(data = recap_deut, aes(x=deut-4, y = .016, 
-  #               label = paste0(recap_bands$bands, " (",
-  #                              recap_iso_birds$age,
-  #                              ")"), angle = 90)) +
-  # annotation_custom(g1,  xmin=c(-90, -70), xmax = c(-50, -50),
-  #                   ymin = 0, ymax = .01) +
-  # # annotation_custom(g1, xmin=recap_deut$deut[2]-10, xmax = recap_deut$deut[2], 
-  #                   ymin = 0, ymax = .01) +
-  geom_custom(data = recap_deut, aes(data = pic, x = deut+7), y = .001, 
-              grob_fun = rasterGrob, fun_params = list(height= unit(1, "cm"))) +
-  xlab(expression(paste(delta, "D", sep = ""))) +
-  scale_y_continuous(breaks=seq(0,.06,.05)) +
-  ylab("Density") +
-  labs(linetype = "Origin") +
-  theme_classic() 
+(deut_cap <- ggplot() +
+   stat_density(data = deut_origin, 
+                aes(x = dD, linetype = origin), geom = "path",
+                position = "identity") +
+   facet_wrap(~age, scales = "free_x") +
+   # scale_fill_manual(values = pal4) +
+   # scale_color_manual(values = pal4) +
+   geom_vline(data = recap_deut, aes(xintercept = deut), linetype = "dashed") +
+   # geom_text(data = recap_deut, aes(x=deut-4, y = .016, 
+   #               label = paste0(recap_bands$bands, " (",
+   #                              recap_iso_birds$age,
+   #                              ")"), angle = 90)) +
+   # annotation_custom(g1,  xmin=c(-90, -70), xmax = c(-50, -50),
+   #                   ymin = 0, ymax = .01) +
+   # # annotation_custom(g1, xmin=recap_deut$deut[2]-10, xmax = recap_deut$deut[2], 
+   #                   ymin = 0, ymax = .01) +
+   geom_custom(data = recap_deut, aes(data = pic, x = deut+7), y = .001, 
+               grob_fun = rasterGrob, fun_params = list(height= unit(1, "cm"))) +
+   xlab(expression(paste(delta, "D", sep = ""))) +
+   scale_y_continuous(breaks=seq(0,.06,.05)) +
+   ylab("Probability Density") +
+   labs(linetype = "Origin") +
+   theme_classic() )
 
-deut_cap
+ggsave(deut_cap, file ="figures/hist.png", dpi = 400)
 # ggsave("owlplot.png", dpi = 400)
 ```
 
 # dD by Time
-We can also ask whether we see evidence of migration picking up late by considering whether dD varies by date. We'll first graph it.
+Look for evidence of migration picking up late by considering whether dD varies by date. We'll first graph it.
 
 ```{r}
 #dD by julian date
-deut_by_date <- ggplot(data = deut_data, aes(x = Julian, y = dD)) +
-  geom_point() +
-  geom_smooth(method = "lm", color = "black") +
-  geom_hline(yintercept = mean(deut_data$dD), linetype = "dashed") +
-  ylab(expression(paste(delta ^"2", "D", sep = ""))) +
-  xlab("Julian Date") +
-  scale_y_continuous(breaks=c(-85,-65,-45, -25)) +
-  #scale_x_continuous(breaks=c(244,249,255)) +
-  theme_classic()
+(deut_by_date <- ggplot(data = deut_data, aes(x = Julian, y = dD)) +
+   geom_point() +
+   geom_smooth(method = "lm", color = "black") +
+   geom_hline(yintercept = mean(deut_data$dD), linetype = "dashed") +
+   ylab(expression(paste(delta ^"2", "D", sep = ""))) +
+   xlab("Julian Date") +
+   scale_y_continuous(breaks=c(-85,-65,-45, -25)) +
+   #scale_x_continuous(breaks=c(244,249,255)) +
+   theme_classic())
 
-deut_by_date
+ggsave(deut_by_date, file = "figures/dDbytime.png", dpi = 400)
 ```
 
 We can also run the linear model for this.
@@ -575,18 +508,18 @@ fit.notime <- lm(Julian ~ 1, data = deut_time)
 fit.time <- lm(Julian ~ dD, data = deut_time)
 # fit.age <- lm(Julian ~ age, data = deut_time)
 #only 5 observations
- 
+
 
 #AIC selection
 aictab(list("intercept" = fit.notime, "time by dD" = fit.time))
 summary(fit.time)
 summary(fit.notime)
+
+confint(fit.time)
 # summary(fit.age)
 ```
 
-Basically two equally plausible models - interesting that the time covariate model is the best but when we look at the $\beta_1$ estimate it's basically 0 with very high SE, so no real evidence that time explains mean variation in $\delta D$.
-
-We can also separate the dD over time by age groups for age-known birds.
+Separate the dD over time by age groups for age-known birds.
 
 ```{r}
 #dD by julian date and age
@@ -619,9 +552,18 @@ ggPredict(fit.timebyage,se=TRUE) +
   theme_classic()
 ```
 
+# Passage Dates
+```{r}
+owl_comb %>% 
+  group_by(sex, origin) %>% 
+  summarise(m_pass = median(Julian), r = range(Julian)[1], r2 = range(Julian)[2])
+
+owl_comb %>% 
+  group_by(age, origin) %>% 
+  summarise(m_pass = median(Julian), r = range(Julian)[1], r2 = range(Julian)[2])
+```
 
 # Sex and age ratios
-
 ```{r}
 owl_comb$sex[owl_comb$sex == "?"] <- "U"
 agesex <- ggplot(data = owl_comb[!is.na(owl_comb$age),]) +
@@ -697,7 +639,14 @@ caprates$year <- as.factor(caprates$year)
 caprates <- caprates[-which(caprates$cap_per_hr == max(caprates$cap_per_hr)),]
 ```
 
-No we can fit a set of linear models to consider any trend in capture rates over time.
+summary stats
+```{r}
+#total median and range
+median(caprates$cap_per_hr)
+range(caprates$cap_per_hr)
+```
+
+Now we can fit a set of linear models to consider any trend in capture rates over time.
 ```{r}
 #Use lm and information theoretics to test hypotheses about rate
 #can't do mixed effects because too few data- models don't converge
@@ -715,20 +664,22 @@ caprates$fit <- predict(rate.quad)
 
 Now we're ready to plot the rate over time and we can supply the trendline from our best model (the intercept model).
 
-```{r}
+```{r fig.height=4, fig.width=6}
 #plot
 cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
   geom_point(aes(group = year, shape = year), colour="black") +
   # scale_shape_manual(values = c(1:4)) +
   # scale_fill_manual(values = wes_palette("FantasticFox1", 4, "discrete")) +
   geom_smooth(method = "lm", color = "black",
-             formula = y ~ poly(x, 2, raw = T)) +
+              formula = y ~ poly(x, 2, raw = T)) +
   ylab(expression("Captures " ~ hr^{-1})) +
   xlab("Julian Date") +
+  labs(shape = "Year") +
   theme_classic()
 
-cap_rate_plot
-ggsave("figures/caprate.png", dpi = 400)
+ggsave(cap_rate_plot, file = "figures/caprate.png", dpi = 400, width = 6, 
+       height = 4)
+# ggsave("figures/caprate.png", dpi = 400)
 ```
 
 # Spatial Analyses
@@ -737,13 +688,14 @@ First we need to bring in the relevant data.
 
 ```{r}
 #read in the recapture data
-owl_recap <- read.csv("data/recap_wide.csv")
+owl_recap <- read.csv("data/recap_wide.csv") %>% 
+  left_join(owl_comb, by = "band")
 
 #make lines for each cap-recap pair
 recap_lines <- lapply(X=1:nrow(owl_recap), FUN = function(x) {
   pair <- st_linestring(matrix(c(owl_recap$x_1[x], owl_recap$y_1[x],
-                     owl_recap$x_2[x], owl_recap$y_2[x]), byrow = T, 
-                     nrow = 2))
+                                 owl_recap$x_2[x], owl_recap$y_2[x]), byrow = T, 
+                               nrow = 2))
   return(pair)
 })
 
@@ -777,10 +729,10 @@ hotel_terr <- st_read("gis/hotel_territories_2016.shp", crs = 26913) %>%
 
 #make hayman boundary
 hayman_bound <- st_sfc(st_polygon(x=list(matrix(c(476612, 4335175, 
-                         476612, 4328660, 
-                         484110, 4328660, 
-                         484110, 4335175,
-                         476612, 4335175), ncol = 2, byrow = T)))) %>% 
+                                                  476612, 4328660, 
+                                                  484110, 4328660, 
+                                                  484110, 4335175,
+                                                  476612, 4335175), ncol = 2, byrow = T)))) %>% 
   st_set_crs(26913) %>% 
   st_transform("+init=epsg:4326")
 
@@ -791,7 +743,7 @@ nets_sf <- st_as_sf(nets, coords = c("x", "y"), crs = 26913) %>%
 
 #get google maps base layer
 base <- get_map(center = c(lon = -105.1, lat = 39.1), zoom = 11, 
-                      maptype ="terrain", color = "bw")
+                maptype ="terrain", color = "bw")
 ```
 
 Make maps:
@@ -810,21 +762,21 @@ f2s_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   geom_sf(data = owl_first[mult_recap$cap_type == "f2s", ], 
           inherit.aes = FALSE, shape = 15, color = "black") +
   geom_sf(data = owl_second[mult_recap$cap_type == "f2s", ],
-          inherit.aes = FALSE, shape = 24, color = "black", fill = "#F0F8FF") +
-  geom_text(aes(x = -105.05, y = 39.17, label = "MG")) +
-  geom_text(aes(x = -105.05, y = 39.11, label = "HG")) +
-  geom_text(aes(x = -105.225, y = 39.175, label = "HF")) +
-  geom_text(aes(x = -105.12, y = 39.055, label = "TC")) +
+          inherit.aes = FALSE, shape = 24) +
   north(x.min = -105.1, x.max = -105.0, y.min = 39.07, y.max = 39.18, 
         location = "bottomleft") +
-  ggtitle(expression(Fall %->% Resident)) +
+  # scalebar(x.min = -105.3, x.max = -105.01, y.min = 39.07, y.max = 39.18, 
+  #          dist = 2, dist_unit = "km", st.bottom = FALSE, 
+  #          st.color = "black", transform = TRUE, model = "WGS84", 
+  #          st.dist = .05) +
+  ggtitle("(A)") +
   theme_minimal() +
   theme(axis.text = element_blank(),
         axis.ticks = element_blank(),
         axis.title = element_blank())
 
-#make summer to fall map
-s2f_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
+#make natal dispersal map
+nat_disp_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   xlim(c(-105.22, -105.03)) +
   ylim(c(39.07, 39.18)) +
   coord_sf() +
@@ -836,29 +788,89 @@ s2f_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
           linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
           linetype = "twodash", color = "black", size = 1.25) +
-  geom_sf(data = mult_recap[mult_recap$cap_type == "s2f", ], 
+  geom_sf(data = mult_recap[mult_recap$cap_type == "s2f" & 
+                              mult_recap$age_1 == "HY", ], 
           inherit.aes = FALSE, color = "black") +
-  geom_sf(data = owl_first[mult_recap$cap_type == "s2f", ], 
-          inherit.aes = FALSE, shape = 15, color = "black") +
-  geom_sf(data = owl_second[mult_recap$cap_type == "s2f", ],
-          inherit.aes = FALSE, shape = 24, color = "black", fill = "#F0F8FF") +
-  geom_text(aes(x = -105.05, y = 39.17, label = "MG")) +
-  geom_text(aes(x = -105.05, y = 39.11, label = "HG")) +
-  geom_text(aes(x = -105.21, y = 39.175, label = "HF")) +
-  geom_text(aes(x = -105.12, y = 39.055, label = "TC")) +
+  geom_sf(data = owl_first[mult_recap$cap_type == "s2f" & 
+                             mult_recap$age_1 == "HY", ], 
+          inherit.aes = FALSE, shape = 24, color = "black") +
+  geom_sf(data = owl_second[mult_recap$cap_type == "s2f" &
+                              mult_recap$age_1 == "HY", ],
+          inherit.aes = FALSE, shape = 15, color = "black", fill = "#F0F8FF") +
   scalebar(x.min = -105.22, x.max = -105.03, y.min = 39.07, y.max = 39.18, 
            dist = 4, dist_unit = "km", st.bottom = FALSE, 
            st.color = "black", transform = TRUE, model = "WGS84", 
            st.dist = .05) +
-  # north(x.min = -105.3, x.max = -105.0, y.min = 39.0, y.max = 39.18, 
+  # north(x.min = -105.20, x.max = -105.15, y.min = 39.07, y.max = 39.2,
   #       location = "bottomleft") +
-  ggtitle(expression(Resident %->% Fall)) +
   theme_minimal() +
+  ggtitle("(B)") +
   theme(axis.text = element_blank(),
         axis.ticks = element_blank(),
         axis.title = element_blank())
 
-grid.arrange(f2s_plot, s2f_plot, widths = c(1.1,2), nrow = 1)
+dispplots <- arrangeGrob(grobs = list(f2s_plot, nat_disp_plot), 
+                         widths = unit(c(2.2,4), c("in", "in")), 
+                         layout_matrix = matrix(c(1,2), nrow = 1))
+
+ggsave(dispplots, file = "figures/dispplots.png", dpi = 400)
+```
+
+Map that shows territories of breeders captured in the fall.
+
+```{r}
+(breeder_caps <- ggmap(base, darken = c(.3,"#FFFFFF")) +
+   coord_sf() +
+   geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
+           linetype = "twodash", color = "black", size = 1.25) +
+   geom_sf(data = hotel_terr, inherit.aes = FALSE, linetype = "dashed",
+           size = 1, color = "black",
+           fill = NA) +
+   #  scale_linetype_manual(values = c("A7" = "solid", "A15" = "solid",
+   #                                  "A2" = "solid", "A8" = "solid",
+   #                                  "A10" = "solid", "A18" = "solid",
+   #                                  "A20" = "dashed", "A4" = "dashed",
+   #                                  "A12" = "dashed", "A13" = "dashed",
+   #                                  "A11" = "dashed", "A27" = "dashed",
+   #                                  "A40" = "dashed", "A41" = "dashed", 
+   #                                  "A43" = "dashed", "A44" = "dashed",
+   #                                  "A29" = "dashed", "A24" = "dashed",
+   #                                  "A45" = "dashed")) +
+   geom_sf(data = mult_recap[mult_recap$cap_type == "s2f" &
+                               mult_recap$age == "AHY" &
+                               mult_recap$band %in% 
+                               mult_recap$band[mult_recap$cap_type == "b2f2s"], ],
+           inherit.aes = F, color = "black", aes(size = band)) +
+   scale_size_manual(values = c("1783-64546" = 2, "1783-64541" = 2,
+                                "1783-64465" = 1, "1783-64515" = 1,
+                                "1783-64397" = 1, "1593-64747" = 1,
+                                "1783-64506" = 1, "1783-64514" = 1)) +
+   geom_sf(data = owl_first[owl_first$cap_type == "s2f" &
+                              owl_first$age == "AHY" &
+                              owl_first$band %in%
+                              owl_first$band[owl_first$cap_type == "b2f2s"], ],
+           inherit.aes = F, color = "black", shape = 24, size = 3) +
+   geom_sf(data = owl_second[owl_second$cap_type == "s2f" &
+                               owl_second$age == "AHY" &
+                               owl_second$band %in%
+                               owl_second$band[owl_second$cap_type == "b2f2s"], ],
+           inherit.aes = F, color = "black", shape = 15, size = 3) +
+   scalebar(x.min = -105.07, x.max = -105.025, y.min = 39.078, y.max = 39.106, 
+            dist = 1, dist_unit = "km", st.bottom = FALSE, 
+            st.color = "black", transform = TRUE, model = "WGS84", 
+            st.dist = .04) +
+   north(x.min = -105.07, x.max = -105.05, y.min = 39.078, y.max = 39.106, 
+         location = "bottomleft") +
+   scale_x_continuous(limits = c(-105.07, -105.025), 
+                      breaks = seq(-105.07, -105.03, .02)) +
+   scale_y_continuous(limits = c(39.078, 39.106), 
+                      breaks = seq(39.08, 39.107, .01)) +
+   theme_minimal() +
+   theme(axis.text = element_blank(),
+         axis.ticks = element_blank(),
+         axis.title = element_blank(),
+         legend.position = "none"))
+
 ```
 
 Make study area map
@@ -886,7 +898,10 @@ study_areas <- ggmap(base, darken = c(.3,"#FFFFFF")) +
         location = "bottomleft") +
   scale_x_continuous(limits = c(-105.3, -105.0), 
                      breaks = seq(-105.3, -105.0, .2)) +
-  scale_y_continuous(limits = c(39.0, 39.18), breaks = seq(39.0, 39.18, .1))
+  scale_y_continuous(limits = c(39.0, 39.18), breaks = seq(39.0, 39.18, .1)) +
+  xlab("") +
+  ylab("") +
+  theme(axis.text = element_text(size = 14))
 
 net_sites <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   coord_sf() +
@@ -904,29 +919,29 @@ net_sites <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   scale_x_continuous(limits = c(-105.07, -105.025), 
                      breaks = seq(-105.07, -105.03, .02)) +
   scale_y_continuous(limits = c(39.078, 39.106), 
-                     breaks = seq(39.08, 39.107, .01))
+                     breaks = seq(39.08, 39.107, .01)) +
+  xlab("") +
+  ylab("")
 
+#US Map
+#get US map of state boundaries
+usa_states <- ne_states(returnclass = "sf", country = "united states of america")
+#get US borders
+us <- ne_countries(country = "united states of america", returnclass = "sp")
 
-study_areas
-net_sites
+(usmap <- ggplot() +
+    geom_sf(data = usa_states) + 
+    xlim(125, 65) +
+    #fix bug that won't let me remove grid lines with this...
+    coord_sf(datum = NA) +
+    theme_void())
+
+ggsave(study_areas, file = "figures/study_area_fig/study_area.png", dpi = 400)
+ggsave(net_sites, file = "figures/study_area_fig/net_ites.png", dpi = 400)
+ggsave(usmap, file = "figures/study_area_fig/usa.png", dpi = 400)
 
 ```
-
-Make function to calculate straight-line distance from X,Y coords (pythagorean theorem and such...)
-
-```{r}
-calc_dist <- function(x_1, y_1, x_2, y_2) {
-  x_dist <- abs(x_1-x_2)
-  y_dist <- abs(y_1-y_2)
-  dist <- sqrt((x_dist^2)+(y_dist^2))
-  return(dist)
-  }
-```
-
-
-
-# Session Info
-
+# Session Info  
 ```{r}
 sessionInfo()
 ```
