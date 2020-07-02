@@ -88,24 +88,31 @@ probAssign <- function(dD, mean, sd) {
   pval <- pnorm(dD, mean = mean, sd = sd, lower.tail = F)
 }
 
+#make a function to assign a "local" or "unknown" status based on originally recorded codes
+makeorigin <-Vectorize(function(x) {
+  switch(x, "RA" = "local", "NR" = "local",
+         "RY" = "local", "U" = "unknown", "F" = "unknown",
+         "PF" = "unknown", "BR" = "local")
+}, "x")
 ```
+
+#Graphing Tools
 
 ```{r}
 #create color palette
 pal <- c("#3B9AB2", "#EBCC2A")
+
+#4 col palette
+pal4 <- wes_palette("Zissou1", 4, "discrete")
 ```
 
-
 # Initial Data Import, Cleaning, and Management 
-
-## Load and clean dD dataset
 
 ```{r}
 #read in the raw iso data .csv
 owl_deut <- read.csv("data/owl_dD.csv", stringsAsFactors = F)
 
 #replace two cases of missing band #s
-#UPDATE THIS - right now this just removes the last two rows...
 owl_deut <- owl_deut[1:(nrow(owl_deut)-2),] 
 
 #create new identifier that removes the beginning "o"
@@ -134,22 +141,18 @@ fall_band <- read.csv("data/fall_band.csv", stringsAsFactors = F)
 
 #merge data frames based on the 3 band columns
 owl_comb <- merge(owl_deut, fall_band, by.x = c("band", "suffix", "prefix"),
-                  by.y = c("Index.Band", "Suffix", "Prefix"), 
+                  by.y = c("Index_Band", "Suffix", "Prefix"), 
                   all = T)
 
 #update status column for breeding season captures of known residents
 owl_comb$ID[is.na(owl_comb$ID)] <- "BR"
 ```
 
-Next step is to bring in some necessary data from the MEF band dataset for the BR birds.
+Bring in some data from the Manitou Ecperimental Forest (MEF) banded birds dataset for the BR birds.
 
 ```{r}
-#read in MEF band data as of 2018 field season
-mef_band <- read.csv("data/mef_band_2018.csv")
-
-#extract the rows of the MEF data whose band number match those in owl_comb
-mef_deut <- mef_band[mef_band$Band.Prefix %in% owl_comb$prefix &
-                       mef_band$Band.Suffix %in% owl_comb$suffix,]
+#read in relevant MEF band data as of 2018 field season
+mef_deut <- read.csv("data/mef_fall.csv")
 
 #Fill in missing age data from MEF BR birds
 #first create data frame of the sex and age values for the 26 MEF BNR birds
@@ -176,14 +179,7 @@ owl_comb$sex <- ifelse(!is.na(owl_comb$Sex.x), owl_comb$Sex.x,
 A bit more cleaning and combining - get combined age and sex columns
 
 ```{r}
-#make a function to assign a "local" or "unknown" status
-makeorigin <-Vectorize(function(x) {
-  switch(x, "RA" = "local", "NR" = "local",
-         "RY" = "local", "U" = "unknown", "F" = "unknown",
-         "PF" = "unknown", "BR" = "local")
-}, "x")
-
-#apply function and put results in new column of owl_comb
+#apply status origin function and put results in new column of owl_comb
 owl_comb$origin <- as.factor(makeorigin(owl_comb$ID))
 
 #change date format
@@ -218,9 +214,6 @@ doubles <- deut_data[duplicated(deut_data$band) | duplicated(deut_data$band,
 #sort by band number and then feather type
 doubles <- doubles[order(doubles$band, doubles$iso_feath_type),] 
 
-# #remove single case with 2 juv feathers and no primary
-# doubles <- filter(doubles, doubles$band != "1833-03340") 
-
 #convert to factors
 doubles$band <- as.factor(doubles$band)
 ```
@@ -248,7 +241,7 @@ difs <- data.frame(dD = na.omit(difs),
 
 ```
 
-Descriptive numbers:
+Descriptive stats:
 
 ```{r}
 max(abs(difs$dD))
@@ -275,21 +268,22 @@ We now make a plot showing the distribution of differences.
 ggsave(difs_plot, file = "figures/difs_plot.png", dpi = 400)
 ```
 
-# Isotope analyis for known- and unknown-origin birds
-First we need to remove those values for which age is unknown since AHy and HY have differnet dD values.
+# Isotope analyis to compare known- and unknown-origin birds
+
+First we need to remove those values for which age is unknown since AHY and HY have different dD values.
 
 ```{r}
 deut_data_age <- deut_data[!is.na(deut_data$age),]
 ```
 
-Start by removing the double-measured unknown birds - get rid of juvenile feathers when possible
+Remoce double-measured unknown birds so they only "count once" - if we have primary and juv contour feathers, remove juvenile feathers.
 
 ```{r}
 #sort by band number and then feather type
 deut_origin <- deut_data_age[order(deut_data_age$band, 
                                    deut_data_age$iso_feath_type),] 
 
-#extract all the double measured individuals by keeping only duplicated bands
+#extract all the double measured individuals by keeping only the not duplicated bands
 deut_origin <- deut_origin[!duplicated(deut_data_age$band, fromLast = T),]
 
 #print some sub-sample sizes
@@ -333,18 +327,20 @@ First we need to get the distributional parameters of the known-orgins birds by 
 #pull out local only
 deut_local <- deut_origin[deut_origin$origin == "local",]
 
+#get Gaussian params
 mean_hy <- mean(deut_local$dD[deut_local$age == "HY"])
 sd_hy <- sd(deut_local$dD[deut_local$age == "HY"])
 
 mean_ahy <- mean(deut_local$dD[deut_local$age == "AHY"])
 sd_ahy <- sd(deut_local$dD[deut_local$age == "AHY"])
 
+#store in a dataframe
 param_df <- data.frame("age" = c("HY", "AHY"),
                        "mean" = c(mean_hy, mean_ahy),
                        "sd" = c(sd_hy, sd_ahy))
 ```
 
-Now we can use those parameters to assume a normal distribution for the known-origin birds for each age class and then assess the probability of each unknown-origin individual having come from the associated known-origin distribution. First, to make this computationally simple, we'll just separate the HY from AHY birds.
+Now weuse those parameters to parameterize a Gaussian distribution for the known-origin birds for each age class and then assess the probability of each unknown-origin individual having come from the associated known-origin distribution. First, to make this computationally simple, we'll just separate the HY from AHY birds.
 
 ```{r}
 deut_hy <- deut_origin[deut_origin$age == "HY" & 
@@ -354,7 +350,7 @@ deut_ahy <- deut_origin[deut_origin$age == "AHY" &
 
 ```
 
-Now we can pull the respective probabilities
+Now we extract the respective probabilities using the `probAssign` fxn.
 
 ```{r}
 deut_prob_hy <- sapply(deut_hy$dD, probAssign, mean = mean_hy, sd = sd_hy)
@@ -365,6 +361,7 @@ deut_probs <- data.frame("prob" = c(deut_prob_hy, deut_prob_ahy),
                          "age" = c(rep("HY", length(deut_prob_hy)),
                                    rep("AHY", length(deut_prob_ahy))),
                          "dD" = c(deut_hy$dD, deut_ahy$dD))
+
 deut_probs$sig <- sapply(deut_probs$prob, function(x) {
   if(x>= 0.975 | x <= 0.025){
     return("sig")
@@ -376,12 +373,15 @@ deut_probs$sig <- sapply(deut_probs$prob, function(x) {
 
 ```
 
+
+Extract to dD and probs associated with samples that fall outsisde the confidence intervals
 ```{r }
 deut_probs$dD[deut_probs$prob < .025 | deut_probs$prob > .975]
 deut_probs$prob[deut_probs$prob < .025 | deut_probs$prob > .975]
 
 ```
 
+Plot the dD values with the CI bounds, facted by age
 ```{r}
 ggplot() +
   geom_jitter(data = deut_probs, 
@@ -392,13 +392,6 @@ ggplot() +
                aes(x = .1, xend = 1, y = qnorm(0.975, mean = mean, sd = sd), 
                    yend = qnorm(0.975, mean = mean, sd = sd)), 
                linetype = "twodash", xmin = .1) +
-  
-  # geom_hline(data = param_df, 
-  #            aes(yintercept = qnorm(0.975, mean = mean, sd = sd)), 
-  #            linetype = "twodash", xmin = .1) +
-  # geom_hline(data = param_df, 
-  #            aes(yintercept = qnorm(0.025, mean = mean, sd = sd)), 
-  #            linetype = "twodash") +
   geom_segment(data = param_df, 
                aes(y = qnorm(0.025, mean = mean, sd = sd), 
                    yend = qnorm(0.025, mean = mean, sd = sd), x = .1, xend = 1), 
@@ -414,6 +407,15 @@ ggplot() +
 
 # Fall to Breeding Individuals
 
+Load an owl grpahic used for plotting.
+
+```{r}
+#read in owl graphic and transform to rasterGrob object
+owl <- readPNG("art/FLOW Line Drawing.png")
+imgl <- list(owl, owl)
+```
+
+
 Fall birds recaptured as breeders in subsequent years relative to the dD distributions.
 
 ```{r}
@@ -421,13 +423,11 @@ Fall birds recaptured as breeders in subsequent years relative to the dD distrib
 falltosummer <- c("1783-64429","1833-03191","1783-64490","1783-64452",
                   "1833-03104","1833-03116","1833-03309","1833-03322",
                   "1833-03307","1783-74351","1833-03329","1833-03417")
-#read in owl graphic and transform to rasterGrob object
-owl <- readPNG("art/FLOW Line Drawing.png")
-imgl <- list(owl, owl)
-#g1 <- rasterGrob(owl, interpolate=FALSE)
+
 #get the dD values for F2S birds
 recap_deut <- deut_data$dD[which(deut_data$band %in% falltosummer)]
 recap_deut <- data.frame(deut = recap_deut, age = c("HY", "AHY"))
+
 #need to reverse order for faceting below
 recap_deut <- recap_deut[nrow(recap_deut):1,]
 recap_deut$pic <- I(imgl)
@@ -437,16 +437,13 @@ recap_bands <- data.frame(bands = deut_data$band[which(deut_data$band %in%
                                                          falltosummer)])
 recap_bands <- data.frame(bands = recap_bands, age = c("HY", "AHY"))
 
-#need to reverse order for faceting below
-
-#recap_bands <- recap_bands[nrow(recap_bands):1,]
-
+#extract the deut data that matches aby fall to summer birds
 recap_iso_birds <- deut_data[which(deut_data$band %in% falltosummer),]
 recap_iso_birds
 
+#transform age to a factor
 deut_data_age$age <- factor(deut_data_age$age)
 
-pal4 <- wes_palette("Zissou1", 4, "discrete")
 ```
 
 ```{r}
@@ -456,17 +453,8 @@ pal4 <- wes_palette("Zissou1", 4, "discrete")
                 aes(x = dD, linetype = origin), geom = "path",
                 position = "identity") +
    facet_wrap(~age, scales = "free_x") +
-   # scale_fill_manual(values = pal4) +
-   # scale_color_manual(values = pal4) +
    geom_vline(data = recap_deut, aes(xintercept = deut), linetype = "dashed") +
-   # geom_text(data = recap_deut, aes(x=deut-4, y = .016, 
-   #               label = paste0(recap_bands$bands, " (",
-   #                              recap_iso_birds$age,
-   #                              ")"), angle = 90)) +
-   # annotation_custom(g1,  xmin=c(-90, -70), xmax = c(-50, -50),
-   #                   ymin = 0, ymax = .01) +
-   # # annotation_custom(g1, xmin=recap_deut$deut[2]-10, xmax = recap_deut$deut[2], 
-   #                   ymin = 0, ymax = .01) +
+
    geom_custom(data = recap_deut, aes(data = pic, x = deut+7), y = .001, 
                grob_fun = rasterGrob, fun_params = list(height= unit(1, "cm"))) +
    xlab(expression(paste(delta, "D", sep = ""))) +
@@ -476,10 +464,11 @@ pal4 <- wes_palette("Zissou1", 4, "discrete")
    theme_classic() )
 
 ggsave(deut_cap, file ="figures/hist.png", dpi = 400)
-# ggsave("owlplot.png", dpi = 400)
+
 ```
 
 # dD by Time
+
 Look for evidence of migration picking up late by considering whether dD varies by date. We'll first graph it.
 
 ```{r}
@@ -519,40 +508,9 @@ confint(fit.time)
 # summary(fit.age)
 ```
 
-Separate the dD over time by age groups for age-known birds.
-
-```{r}
-#dD by julian date and age
-deut_by_date <- ggplot(data = deut_data_age, aes(x = Julian, y = dD, 
-                                                 shape = age, color = age)) +
-  geom_point() +
-  geom_smooth(method = "lm", aes(color = age)) +
-  ylab(expression(paste(delta, "D", sep = ""))) +
-  xlab("Julian Date") +
-  theme_classic()
-
-deut_by_date
-```
-
-Let's also re-run the linear models including an interaction with age.
-```{r}
-#make datset with no missing values for age or Julian 
-deut_data_age_time <- deut_data_age[!is.na(deut_data_age$Julian),]
-
-#fit models
-fit.notime <- lm(dD ~ 1, data = deut_data_age_time)
-fit.time <- lm(dD ~ Julian, data = deut_data_age_time)
-fit.timebyage <- lm(dD ~ Julian*age, data = deut_data_age_time)
-
-aictab(list("intercept" = fit.notime, "time" = fit.time, 
-            "time*age" = fit.timebyage))
-
-summary(fit.timebyage)
-ggPredict(fit.timebyage,se=TRUE) +
-  theme_classic()
-```
-
 # Passage Dates
+
+Get summary passage data stats (median and range)
 ```{r}
 owl_comb %>% 
   group_by(sex, origin) %>% 
@@ -565,15 +523,10 @@ owl_comb %>%
 
 # Sex and age ratios
 ```{r}
-owl_comb$sex[owl_comb$sex == "?"] <- "U"
-agesex <- ggplot(data = owl_comb[!is.na(owl_comb$age),]) +
-  geom_mosaic(aes(x = product(sex, age), fill = sex)) +
-  scale_fill_grey(start = 0, end = .9) + 
-  theme_bw()
-agesex
-
+#convert coding for sex
 ```
 
+Pull summary.descriptive stats
 ```{r}
 #total records
 tot <- nrow(owl_comb)
@@ -603,15 +556,6 @@ sum(na.omit(owl_comb$age == "AHY" & owl_comb$sex == "F"
 sum(na.omit(owl_comb$age == "AHY" & owl_comb$sex == "M" 
             & owl_comb$origin == "unknown"))
 
-```
-
-```{r}
-ggplot(data = owl_comb[owl_comb$origin == "unknown" & !is.na(owl_comb$age),]) +
-  geom_boxplot(aes(x = age, y = Julian))
-
-ggplot(data = owl_comb[owl_comb$origin == "unknown" & !is.na(owl_comb$sex),]) +
-  geom_boxplot(aes(x = sex, y = Julian))
-
 median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
                                  owl_comb$age == "HY"]))
 median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
@@ -621,15 +565,14 @@ median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" &
                                  owl_comb$sex == "M"]))
 median(na.omit(owl_comb$Julian[owl_comb$origin == "unknown" & 
                                  owl_comb$sex == "F"]))
-
 ```
 
 # Passage Rates
 
-First let's load the data in and do any cleaning.
+Load capture rate data and organize/clean.
 
 ```{r}
-#need to get net hours by date to normalize this
+#need to get net hours by date to normalize this - load net hours data
 caprates <- read.csv("data/nethours.csv")
 
 #convert year to factor
@@ -649,7 +592,6 @@ range(caprates$cap_per_hr)
 Now we can fit a set of linear models to consider any trend in capture rates over time.
 ```{r}
 #Use lm and information theoretics to test hypotheses about rate
-#can't do mixed effects because too few data- models don't converge
 rate.int <- lm(cap_per_hr ~ 1, data = caprates)
 rate.lin <- lm(cap_per_hr ~ julian, data = caprates)
 rate.quad <- lm(cap_per_hr ~ poly(julian, 2, raw = T), data = caprates)
@@ -662,11 +604,11 @@ summary(rate.lin)
 caprates$fit <- predict(rate.quad)
 ```
 
-Now we're ready to plot the rate over time and we can supply the trendline from our best model (the intercept model).
+Now we're ready to plot the rate over time and we can supply the trendline from our best model (the quadratic model).
 
 ```{r fig.height=4, fig.width=6}
 #plot
-cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
+(cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
   geom_point(aes(group = year, shape = year), colour="black") +
   # scale_shape_manual(values = c(1:4)) +
   # scale_fill_manual(values = wes_palette("FantasticFox1", 4, "discrete")) +
@@ -675,7 +617,7 @@ cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
   ylab(expression("Captures " ~ hr^{-1})) +
   xlab("Julian Date") +
   labs(shape = "Year") +
-  theme_classic()
+  theme_classic())
 
 ggsave(cap_rate_plot, file = "figures/caprate.png", dpi = 400, width = 6, 
        height = 4)
@@ -711,6 +653,7 @@ owl_first <- st_as_sf(owl_recap, coords = c("x_1", "y_1"), crs = 26913) %>%   st
 owl_second <- st_as_sf(owl_recap, coords = c("x_2", "y_2"), 
                        crs = 26913) %>% 
   st_transform("+init=epsg:4326")
+
 #read in the hotel gulch boundary
 hotel_bound <- st_read("gis/Hotel_Shp/hotel_boundary.shp", crs = 26913) %>% 
   st_transform("+init=epsg:4326") 
