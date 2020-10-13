@@ -40,6 +40,7 @@ library(ggiraphExtra)
 library(gridExtra)
 library(egg)
 library(ggthemes)
+library(cowplot)
 
 #inference
 library(lme4)
@@ -54,7 +55,7 @@ library(maptools)
 library(broom)
 library(tmap)
 library(ggsn)
-library(legendMap)
+# library(legendMap)
 library(rnaturalearth)
 library(rnaturalearthdata)
 
@@ -152,18 +153,18 @@ Bring in some data from the Manitou Ecperimental Forest (MEF) banded birds datas
 
 ```{r}
 #read in relevant MEF band data as of 2018 field season
-mef_deut <- read.csv("data/mef_fall.csv")
+mef_deut <- read.csv("data/mef_fall.csv",stringsAsFactors = T)
 
 #Fill in missing age data from MEF BR birds
 #first create data frame of the sex and age values for the 26 MEF BNR birds
 missingMEF <- data.frame(
-  "Age" = mef_deut$Age[which(mef_deut$Band.Suffix %in% 
+  "Age" = mef_deut$Age[which(mef_deut$Band_Suffix %in% 
                                owl_comb$suffix[is.na(owl_comb$PAge)])],
-  "Sex" = mef_deut$Sex[which(mef_deut$Band.Suffix %in% 
+  "Sex" = mef_deut$Sex[which(mef_deut$Band_Suffix %in% 
                                owl_comb$suffix[is.na(owl_comb$Sex)])],
-  "prefix" = mef_deut$Band.Prefix[which(mef_deut$Band.Suffix %in% 
+  "prefix" = mef_deut$Band_Prefix[which(mef_deut$Band_Suffix %in% 
                                           owl_comb$suffix[is.na(owl_comb$Sex)])],
-  "suffix" = mef_deut$Band.Suffix[which(mef_deut$Band.Suffix %in% 
+  "suffix" = mef_deut$Band_Suffix[which(mef_deut$Band_Suffix %in% 
                                           owl_comb$suffix[is.na(owl_comb$Sex)])]
 )
 
@@ -254,7 +255,9 @@ We now make a plot showing the distribution of differences.
 (difs_plot <- ggplot(data = difs) +
    #geom_jitter(aes(x = 1, y = dD), width = .1) +
    geom_point(aes(x = pos, y = dD)) +
-   geom_errorbar(aes(x = pos, y = dD, ymax = dD + 8, ymin = dD - 8),
+   geom_errorbar(aes(x = pos, y = dD, 
+                     ymax = dD + sqrt(2^2+2^2)*2, 
+                     ymin = dD - sqrt(2^2+2^2)*2 ),
                  width = .1) +
    geom_hline(yintercept = 0, linetype = "dashed") +
    #xlim(c(0.5, 1.5)) +
@@ -454,7 +457,7 @@ deut_data_age$age <- factor(deut_data_age$age)
                 position = "identity") +
    facet_wrap(~age, scales = "free_x") +
    geom_vline(data = recap_deut, aes(xintercept = deut), linetype = "dashed") +
-
+   
    geom_custom(data = recap_deut, aes(data = pic, x = deut+7), y = .001, 
                grob_fun = rasterGrob, fun_params = list(height= unit(1, "cm"))) +
    xlab(expression(paste(delta, "D", sep = ""))) +
@@ -477,7 +480,7 @@ Look for evidence of migration picking up late by considering whether dD varies 
    geom_point() +
    geom_smooth(method = "lm", color = "black") +
    geom_hline(yintercept = mean(deut_data$dD), linetype = "dashed") +
-   ylab(expression(paste(delta ^"2", "D", sep = ""))) +
+   ylab(expression(paste(delta ^"2", "H", sep = ""))) +
    xlab("Julian Date") +
    scale_y_continuous(breaks=c(-85,-65,-45, -25)) +
    #scale_x_continuous(breaks=c(244,249,255)) +
@@ -609,15 +612,15 @@ Now we're ready to plot the rate over time and we can supply the trendline from 
 ```{r fig.height=4, fig.width=6}
 #plot
 (cap_rate_plot <- ggplot(data = caprates, aes(x=julian, y = cap_per_hr)) +
-  geom_point(aes(group = year, shape = year), colour="black") +
-  # scale_shape_manual(values = c(1:4)) +
-  # scale_fill_manual(values = wes_palette("FantasticFox1", 4, "discrete")) +
-  geom_smooth(method = "lm", color = "black",
-              formula = y ~ poly(x, 2, raw = T)) +
-  ylab(expression("Captures " ~ hr^{-1})) +
-  xlab("Julian Date") +
-  labs(shape = "Year") +
-  theme_classic())
+   geom_point(aes(group = year, shape = year), colour="black") +
+   # scale_shape_manual(values = c(1:4)) +
+   # scale_fill_manual(values = wes_palette("FantasticFox1", 4, "discrete")) +
+   geom_smooth(method = "lm", color = "black",
+               formula = y ~ poly(x, 2, raw = T)) +
+   ylab(expression("Captures " ~ hr^{-1})) +
+   xlab("Julian Date") +
+   labs(shape = "Year") +
+   theme_classic())
 
 ggsave(cap_rate_plot, file = "figures/caprate.png", dpi = 400, width = 6, 
        height = 4)
@@ -693,11 +696,11 @@ Make maps:
 ```{r }
 #make the fall to summer map
 f2s_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
-  xlim(c(-105.1, -105)) +
-  ylim(c(39.07, 39.18)) +
-  coord_sf() +
+  # xlim(c(-105.1, -105)) +
+  # ylim(c(39.07, 39.18)) +
+  
   geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
-          linetype = "twodash", color = "black", size = 1.25) +
+          linetype = "twodash", color = "black", size = 1.25,) +
   geom_sf(data = miss_bound, inherit.aes = FALSE, fill  = NA, 
           linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = mult_recap[mult_recap$cap_type == "f2s", ], 
@@ -706,23 +709,23 @@ f2s_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
           inherit.aes = FALSE, shape = 15, color = "black") +
   geom_sf(data = owl_second[mult_recap$cap_type == "f2s", ],
           inherit.aes = FALSE, shape = 24) +
+  coord_sf(xlim = c(-105.1, -105), ylim = c(39.07, 39.18)) +
+  scale_x_continuous(breaks = c(-105.1, -105.05, -105)) +
   north(x.min = -105.1, x.max = -105.0, y.min = 39.07, y.max = 39.18, 
         location = "bottomleft") +
   # scalebar(x.min = -105.3, x.max = -105.01, y.min = 39.07, y.max = 39.18, 
   #          dist = 2, dist_unit = "km", st.bottom = FALSE, 
   #          st.color = "black", transform = TRUE, model = "WGS84", 
   #          st.dist = .05) +
+  xlab("") +
+  ylab("") +
   ggtitle("(A)") +
-  theme_minimal() +
-  theme(axis.text = element_blank(),
-        axis.ticks = element_blank(),
-        axis.title = element_blank())
+  theme(axis.text = element_text(size = 8))
 
 #make natal dispersal map
 nat_disp_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
-  xlim(c(-105.22, -105.03)) +
-  ylim(c(39.07, 39.18)) +
-  coord_sf() +
+  # xlim(c(-105.22, -105.03)) +
+  # ylim(c(39.07, 39.18)) +
   geom_sf(data = hayman_bound, inherit.aes = FALSE, fill  = NA, 
           linetype = "twodash", color = "black", size = 1.25) +
   geom_sf(data = hotel_bound, inherit.aes = FALSE, fill  = NA, 
@@ -740,21 +743,27 @@ nat_disp_plot <- ggmap(base, darken = c(.3,"#FFFFFF")) +
   geom_sf(data = owl_second[mult_recap$cap_type == "s2f" &
                               mult_recap$age_1 == "HY", ],
           inherit.aes = FALSE, shape = 15, color = "black", fill = "#F0F8FF") +
+  coord_sf(xlim = c(-105.22, -105.03),
+           ylim = c(39.07, 39.18)) +
   scalebar(x.min = -105.22, x.max = -105.03, y.min = 39.07, y.max = 39.18, 
            dist = 4, dist_unit = "km", st.bottom = FALSE, 
            st.color = "black", transform = TRUE, model = "WGS84", 
            st.dist = .05) +
   # north(x.min = -105.20, x.max = -105.15, y.min = 39.07, y.max = 39.2,
-  #       location = "bottomleft") +
-  theme_minimal() +
+  #       location = "bottomleft") 
+  xlab("") +
+  ylab("") +
   ggtitle("(B)") +
-  theme(axis.text = element_blank(),
-        axis.ticks = element_blank(),
-        axis.title = element_blank())
+  theme(axis.text = element_text(size = 8))
 
-dispplots <- arrangeGrob(grobs = list(f2s_plot, nat_disp_plot), 
-                         widths = unit(c(2.2,4), c("in", "in")), 
-                         layout_matrix = matrix(c(1,2), nrow = 1))
+dispplots <- plot_grid(f2s_plot, nat_disp_plot, NULL, NULL, labels = NULL, 
+                       nrow=1, ncol = 2, rel_widths = c(1, 1.55),
+                       rel_heights = c(1))
+# rel_widths = c(2.6,4))
+# 
+# dispplots <- arrangeGrob(grobs = list(f2s_plot, nat_disp_plot), 
+#                          widths = unit(c(2.5,4), c("in", "in")), 
+#                          layout_matrix = matrix(c(1,2), nrow = 1))
 
 ggsave(dispplots, file = "figures/dispplots.png", dpi = 400)
 ```
@@ -809,10 +818,11 @@ Map that shows territories of breeders captured in the fall.
    scale_y_continuous(limits = c(39.078, 39.106), 
                       breaks = seq(39.08, 39.107, .01)) +
    theme_minimal() +
-   theme(axis.text = element_blank(),
-         axis.ticks = element_blank(),
-         axis.title = element_blank(),
-         legend.position = "none"))
+   theme(
+     # axis.text = element_blank(),
+     # axis.ticks = element_blank(),
+     axis.title = element_blank(),
+     legend.position = "none"))
 
 ```
 
@@ -878,9 +888,11 @@ us <- ne_countries(country = "united states of america", returnclass = "sp")
     #fix bug that won't let me remove grid lines with this...
     coord_sf(datum = NA) +
     theme_void())
+```
 
+```{r}
 ggsave(study_areas, file = "figures/study_area_fig/study_area.png", dpi = 400)
-ggsave(net_sites, file = "figures/study_area_fig/net_ites.png", dpi = 400)
+ggsave(net_sites, file = "figures/study_area_fig/net_sites.png", dpi = 400)
 ggsave(usmap, file = "figures/study_area_fig/usa.png", dpi = 400)
 
 ```
